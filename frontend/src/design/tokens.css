@@ -1,0 +1,102 @@
+@import 'tailwindcss';
+
+/* ==========================================================================
+   品牌设计令牌 —— 对应设计文档 §10.2
+   深色优先、暖色墨底；品牌主色为暖朱橙 Ember；--accent-dynamic 运行时由封面取色注入。
+   禁止：紫粉渐变 / Inter 主字体 / 占位图 / emoji 项目符号。
+   ========================================================================== */
+
+:root {
+  --bg: oklch(0.16 0.012 40);
+  --surface: oklch(0.21 0.014 40);
+  --surface-2: oklch(0.25 0.014 40);
+  --border: oklch(0.31 0.012 40);
+  --text: oklch(0.95 0.006 60);
+  --text-muted: oklch(0.72 0.012 50);
+  --brand: #ff5a36;
+  --brand-600: #e8431f;
+  --accent-dynamic: var(--brand);
+  --success: #3fbf7f;
+  --warning: #f5b301;
+  --danger: #f0524b;
+  --info: #5b9df5;
+}
+
+[data-theme='light'] {
+  --bg: #faf7f2;
+  --surface: #ffffff;
+  --surface-2: #f3ede4;
+  --border: oklch(0.88 0.01 40);
+  --text: oklch(0.24 0.02 40);
+  --text-muted: oklch(0.45 0.015 45);
+  --accent-dynamic: var(--brand);
+}
+
+/* 把 CSS 变量映射为 Tailwind 主题令牌（inline 以便运行时切换主题生效） */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-brand: var(--brand);
+  --color-brand-600: var(--brand-600);
+  --color-accent: var(--accent-dynamic);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  --font-display: 'Clash Display', 'MiSans', 'HarmonyOS Sans SC', system-ui, sans-serif;
+  --font-sans:
+    'Satoshi', 'HarmonyOS Sans SC', 'MiSans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-control: 8px;
+  --radius-card: 12px;
+
+  --ease-brand: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  [data-theme='light'] {
+    color-scheme: light;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent-dynamic);
+    outline-offset: 2px;
+  }
+
+  /* 尊重用户的减弱动效偏好 */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

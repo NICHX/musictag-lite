@@ -1,0 +1,22 @@
+services:
+  musictag-lite:
+    build:
+      # 构建上下文为仓库根目录（需要同时构建前后端）
+      context: ..
+      dockerfile: backend/Dockerfile
+    image: musictag-lite:latest
+    container_name: musictag-lite
+    ports:
+      - '8000:8000'
+    environment:
+      - APP_SECRET_KEY=${APP_SECRET_KEY:?请设置唯一的 APP_SECRET_KEY}
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - MUSIC_ROOT=/music
+      - DATA_DIR=/data
+    volumes:
+      # 曲库（读写）
+      - ${MUSIC_PATH:-./music}:/music:rw
+      # 数据：SQLite / 配置 / 缓存
+      - ./data:/data
+    restart: unless-stopped

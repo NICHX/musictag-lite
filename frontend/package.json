@@ -1,0 +1,36 @@
+{
+  "name": "musictag-lite-frontend",
+  "version": "0.1.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest run",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test:watch": "vitest",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "MusicTag Lite 前端（Vue 3 + Vite + Tailwind v4）",
+  "private": "true",
+  "type": "module",
+  "dependencies": {
+    "pinia": "^4.0.3",
+    "vue": "^3.5.43",
+    "vue-router": "^5.4.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.4",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "@vue/test-utils": "^2.5.1",
+    "jsdom": "^27.0.1",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.7",
+    "vitest": "^3.2.7",
+    "vue-tsc": "^3.3.12"
+  }
+}

@@ -1,0 +1,45 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ---- Node / 前端构建产物 ----
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+coverage/
+
+# ---- 环境与密钥（禁止提交） ----
+.env
+.env.*
+!.env.example
+
+# ---- 运行产物：SQLite / 缓存 / 日志 / 上传 ----
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backend/data/
+backend/.cache/
+backend/logs/
+
+# ---- 测试 fixture 生成的临时音频 ----
+backend/tests/_tmp/
+
+# ---- OS / 编辑器 ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
