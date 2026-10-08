@@ -15,8 +15,8 @@ from typing import Any
 
 import httpx
 
-from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.services.ai_config import AIConfig, resolve
 from app.services.filename_parser import ParsedFilename
 
 logger = get_logger(__name__)
@@ -68,26 +68,29 @@ def _clean_int(value: Any) -> int | None:
         return None
 
 
-def is_ai_available() -> bool:
-    settings = get_settings()
-    return bool(settings.ai_enabled and settings.ai_api_key)
+def is_ai_available(session: object | None = None) -> bool:
+    """便捷判断（供 /capabilities 使用）。"""
+    from app.services.ai_config import is_ai_available as _is_available
+
+    return _is_available(session)
 
 
 async def parse_filename_with_ai(
     filename: str,
     *,
+    config: AIConfig | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> ParsedFilename:
     """调用 OpenAI 兼容的 /chat/completions 解析文件名。"""
-    settings = get_settings()
-    if not settings.ai_enabled:
-        raise AIUnavailableError("AI 辅助未启用（请设置 AI_ENABLED=true）")
-    if not settings.ai_api_key:
-        raise AIUnavailableError("缺少 AI_API_KEY")
+    cfg = config or resolve(None)
+    if not cfg.enabled:
+        raise AIUnavailableError("AI 辅助未启用（请在设置中开启）")
+    if not cfg.api_key:
+        raise AIUnavailableError("缺少 API Key")
 
-    url = f"{settings.ai_base_url.rstrip('/')}/chat/completions"
+    url = f"{cfg.base_url.rstrip('/')}/chat/completions"
     payload: dict[str, Any] = {
-        "model": settings.ai_model,
+        "model": cfg.model,
         "temperature": 0,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -95,10 +98,10 @@ async def parse_filename_with_ai(
         ],
         "response_format": {"type": "json_object"},
     }
-    headers = {"Authorization": f"Bearer {settings.ai_api_key}"}
+    headers = {"Authorization": f"Bearer {cfg.api_key}"}
 
     owns_client = client is None
-    http = client or httpx.AsyncClient(timeout=settings.ai_timeout)
+    http = client or httpx.AsyncClient(timeout=cfg.timeout)
     try:
         response = await http.post(url, json=payload, headers=headers)
         response.raise_for_status()

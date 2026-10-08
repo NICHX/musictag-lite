@@ -207,6 +207,23 @@ export interface Capabilities {
   ai: boolean
 }
 
+/** AI 辅助配置（密钥始终脱敏） */
+export interface AISettings {
+  enabled: boolean
+  base_url: string
+  model: string
+  has_api_key: boolean
+  api_key_masked: string | null
+  available: boolean
+}
+
+export interface AISettingsUpdate {
+  enabled?: boolean
+  base_url?: string
+  model?: string
+  api_key?: string
+}
+
 /** 可编辑字段（与后端 EDITABLE_FIELDS 对齐） */
 export type EditableField =
   | 'title'

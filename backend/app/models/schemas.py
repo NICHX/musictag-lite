@@ -366,6 +366,33 @@ class ConvertRequest(BaseModel):
     target_format: Literal["mp3", "flac", "alac", "wav", "aiff", "opus"] = "mp3"
 
 
+class Capabilities(BaseModel):
+    ffmpeg: bool = False
+    fpcalc: bool = False
+    ai: bool = False
+
+
+class AISettingsRead(BaseModel):
+    """AI 辅助配置（密钥始终脱敏，不回传明文）。"""
+
+    enabled: bool = False
+    base_url: str = "https://api.openai.com/v1"
+    model: str = "gpt-4o-mini"
+    has_api_key: bool = False
+    api_key_masked: str | None = None
+    available: bool = False
+
+
+class AISettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    base_url: str | None = None
+    model: str | None = None
+    api_key: str | None = Field(
+        default=None,
+        description="省略=不修改；空字符串=清除；否则设置为新密钥",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # 文件名解析（F11 的文件名 → 标签方向）
 # --------------------------------------------------------------------------- #

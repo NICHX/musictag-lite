@@ -2,6 +2,8 @@
 
 import { api } from './client'
 import type {
+  AISettings,
+  AISettingsUpdate,
   BatchEditRequest,
   BatchPreviewResponse,
   Candidate,
@@ -126,4 +128,10 @@ export const filenameApi = {
 
 export const systemApi = {
   capabilities: () => api.get<Capabilities>('/capabilities'),
+}
+
+/** AI 辅助配置（密钥脱敏；更新时省略 api_key 表示不修改） */
+export const aiApi = {
+  get: () => api.get<AISettings>('/settings/ai'),
+  update: (body: AISettingsUpdate) => api.patch<AISettings>('/settings/ai', body),
 }

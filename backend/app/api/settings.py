@@ -6,12 +6,18 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from app.core.db import get_session
 from app.models.db import Setting
-from app.models.schemas import SettingsRead, SettingsUpdate
+from app.models.schemas import (
+    AISettingsRead,
+    AISettingsUpdate,
+    SettingsRead,
+    SettingsUpdate,
+)
+from app.services import ai_config
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -47,3 +53,46 @@ def update_settings(
         session.add(row)
     session.commit()
     return SettingsRead(values=_load(session))
+
+
+def _ai_read(session: Session) -> AISettingsRead:
+    config = ai_config.resolve(session)
+    return AISettingsRead(
+        enabled=config.enabled,
+        base_url=config.base_url,
+        model=config.model,
+        has_api_key=bool(config.api_key),
+        api_key_masked=ai_config.mask_key(config.api_key),
+        available=config.available,
+    )
+
+
+@router.get("/ai", response_model=AISettingsRead)
+def get_ai_settings(session: Session = Depends(get_session)) -> AISettingsRead:
+    """读取 AI 辅助配置（密钥脱敏）。"""
+    return _ai_read(session)
+
+
+@router.patch("/ai", response_model=AISettingsRead)
+def update_ai_settings(
+    payload: AISettingsUpdate, session: Session = Depends(get_session)
+) -> AISettingsRead:
+    """更新 AI 辅助配置；``api_key`` 省略表示不修改，传空串表示清除。"""
+    current = ai_config.resolve(session)
+    key_provided = "api_key" in payload.model_fields_set
+    effective_key = payload.api_key if key_provided else current.api_key
+    effective_enabled = current.enabled if payload.enabled is None else payload.enabled
+
+    if payload.base_url and not payload.base_url.strip().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Base URL 必须以 http:// 或 https:// 开头")
+    if effective_enabled and not effective_key:
+        raise HTTPException(status_code=400, detail="启用 AI 辅助前请先填写 API Key")
+
+    ai_config.update(
+        session,
+        enabled=payload.enabled,
+        base_url=payload.base_url,
+        model=payload.model,
+        **({"api_key": payload.api_key} if key_provided else {}),
+    )
+    return _ai_read(session)

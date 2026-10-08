@@ -23,6 +23,7 @@ from app.models.schemas import (
     TrackRead,
     TrackUpdate,
 )
+from app.services import ai_config
 from app.services.ai_parser import AIUnavailableError, parse_filename_with_ai
 from app.services.filename_parser import parse_filename
 from app.services.scrape_orchestrator import scrape_orchestrator
@@ -171,7 +172,7 @@ async def parse_track_filename(
 
     if payload.use_ai:
         try:
-            parsed = await parse_filename_with_ai(track.filename)
+            parsed = await parse_filename_with_ai(track.filename, config=ai_config.resolve(session))
             source, note = "ai", parsed.note
         except AIUnavailableError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

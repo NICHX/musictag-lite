@@ -2,7 +2,8 @@
 import { onMounted, ref } from 'vue'
 
 import { api } from '@/api/client'
-import type { Health, Library, Provider } from '@/api/types'
+import { aiApi } from '@/api/endpoints'
+import type { AISettings, AISettingsUpdate, Health, Library, Provider } from '@/api/types'
 
 const libraries = ref<Library[]>([])
 const providers = ref<Provider[]>([])
@@ -12,19 +13,55 @@ const creating = ref(false)
 const newName = ref('')
 const newPath = ref('')
 
+const ai = ref<AISettings | null>(null)
+const aiForm = ref({ enabled: false, base_url: '', model: '', api_key: '' })
+const aiSaving = ref(false)
+const aiMessage = ref<string | null>(null)
+
+function syncAiForm(data: AISettings): void {
+  ai.value = data
+  aiForm.value = { enabled: data.enabled, base_url: data.base_url, model: data.model, api_key: '' }
+}
+
 async function load(): Promise<void> {
   error.value = null
   try {
-    const [libs, provs, status] = await Promise.all([
+    const [libs, provs, status, aiSettings] = await Promise.all([
       api.get<Library[]>('/libraries'),
       api.get<Provider[]>('/providers'),
       api.get<Health>('/health'),
+      aiApi.get(),
     ])
     libraries.value = libs
     providers.value = provs
     health.value = status
+    syncAiForm(aiSettings)
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载失败'
+  }
+}
+
+async function saveAi(extra: AISettingsUpdate = {}): Promise<void> {
+  aiSaving.value = true
+  error.value = null
+  aiMessage.value = null
+  try {
+    const body: AISettingsUpdate = {
+      enabled: aiForm.value.enabled,
+      base_url: aiForm.value.base_url.trim(),
+      model: aiForm.value.model.trim(),
+      ...extra,
+    }
+    // 留空表示不改动密钥；如需清除请用「清除密钥」
+    if (!extra.api_key && aiForm.value.api_key.trim()) {
+      body.api_key = aiForm.value.api_key.trim()
+    }
+    syncAiForm(await aiApi.update(body))
+    aiMessage.value = '已保存'
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '保存失败'
+  } finally {
+    aiSaving.value = false
   }
 }
 
@@ -70,7 +107,7 @@ onMounted(load)
 <template>
   <section class="mx-auto w-full max-w-4xl px-4 py-6 md:px-6">
     <h1 class="font-display text-2xl font-semibold tracking-tight">设置</h1>
-    <p class="mt-1 text-sm text-muted">库路径、刮削源与运行状态</p>
+    <p class="mt-1 text-sm text-muted">库路径、刮削源、AI 辅助与运行状态</p>
 
     <p v-if="error" class="mt-4 rounded-control border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
       {{ error }}
@@ -120,7 +157,7 @@ onMounted(load)
             添加
           </button>
         </form>
-        <p class="mt-2 text-xs text-muted">已可添加库；目录扫描（增量）与曲目落库将在 M1 启用。</p>
+        <p class="mt-2 text-xs text-muted">扫描会增量识别新文件与变更，已完成落库与标签读取。</p>
       </section>
 
       <section class="rounded-card border border-border bg-surface p-4">
@@ -150,6 +187,92 @@ onMounted(load)
             </button>
           </li>
         </ul>
+      </section>
+
+      <section class="rounded-card border border-border bg-surface p-4">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="text-base font-medium">AI 辅助识别</h2>
+            <p class="mt-1 text-xs text-muted">
+              可选：由模型把复杂文件名解析为标签。默认关闭；只发送文件名字符串（不含路径与音频）；
+              仅在你点击「AI 解析」时调用，不会自动上传。兼容任意 OpenAI 接口。
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            :aria-checked="aiForm.enabled"
+            aria-label="启用 AI 辅助"
+            class="relative mt-1 h-5 w-9 shrink-0 rounded-full border transition-colors"
+            :class="aiForm.enabled ? 'border-brand bg-brand/30' : 'border-border bg-surface-2'"
+            @click="aiForm.enabled = !aiForm.enabled"
+          >
+            <span
+              class="absolute top-0.5 h-3.5 w-3.5 rounded-full transition-all"
+              :class="aiForm.enabled ? 'left-4 bg-brand' : 'left-0.5 bg-muted'"
+            />
+          </button>
+        </div>
+
+        <div class="mt-4 grid gap-3 sm:grid-cols-2">
+          <label class="flex flex-col gap-1 text-xs text-muted">
+            Base URL
+            <input
+              v-model="aiForm.base_url"
+              type="text"
+              placeholder="https://api.openai.com/v1"
+              class="rounded-control border border-border bg-bg px-2.5 py-1.5 font-mono text-sm text-text outline-none placeholder:text-muted focus:border-brand"
+            />
+          </label>
+          <label class="flex flex-col gap-1 text-xs text-muted">
+            模型
+            <input
+              v-model="aiForm.model"
+              type="text"
+              placeholder="gpt-4o-mini"
+              class="rounded-control border border-border bg-bg px-2.5 py-1.5 font-mono text-sm text-text outline-none placeholder:text-muted focus:border-brand"
+            />
+          </label>
+          <label class="flex flex-col gap-1 text-xs text-muted sm:col-span-2">
+            API Key
+            <input
+              v-model="aiForm.api_key"
+              type="password"
+              autocomplete="off"
+              :placeholder="
+                ai?.has_api_key ? `已配置（${ai.api_key_masked}），留空表示不修改` : 'sk-…'
+              "
+              class="rounded-control border border-border bg-bg px-2.5 py-1.5 font-mono text-sm text-text outline-none placeholder:text-muted focus:border-brand"
+            />
+          </label>
+        </div>
+
+        <div class="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            class="rounded-control bg-brand px-3.5 py-1.5 text-sm font-medium text-bg transition-colors hover:bg-brand-600 disabled:opacity-50"
+            :disabled="aiSaving"
+            @click="saveAi()"
+          >
+            {{ aiSaving ? '保存中…' : '保存设置' }}
+          </button>
+          <button
+            v-if="ai?.has_api_key"
+            type="button"
+            class="rounded-control border border-border px-3 py-1.5 text-sm text-muted transition-colors hover:border-danger/60 hover:text-danger disabled:opacity-50"
+            :disabled="aiSaving"
+            @click="saveAi({ enabled: false, api_key: '' })"
+          >
+            清除密钥
+          </button>
+          <span v-if="aiMessage" class="text-xs text-success">{{ aiMessage }}</span>
+          <span
+            class="ml-auto text-xs"
+            :class="ai?.available ? 'text-success' : 'text-muted'"
+          >
+            {{ ai?.available ? '已启用 · 检查器将出现「AI 解析」' : '未启用' }}
+          </span>
+        </div>
       </section>
 
       <section class="rounded-card border border-border bg-surface p-4">
