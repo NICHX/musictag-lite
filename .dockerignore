@@ -14,3 +14,9 @@ backend/logs
 docs
 *.md
 !README.md
+
+# macOS 元数据（AppleDouble / Finder），避免二进制 ./_* 混入导致 Alembic 解析失败
+.DS_Store
+**/.DS_Store
+._*
+**/._*
