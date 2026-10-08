@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import { trackApi } from '@/api/endpoints'
 import type { BatchEditOp } from '@/api/types'
 
 const props = defineProps<{ ids: number[] }>()
 const emit = defineEmits<{ clear: []; done: [] }>()
+
+const router = useRouter()
 
 const FIELDS = [
   { key: 'title', label: '标题' },
@@ -187,7 +190,14 @@ async function apply(): Promise<void> {
 
       <button
         type="button"
-        class="ml-auto rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:text-text"
+        class="ml-auto rounded-control border border-brand/50 px-2.5 py-1 text-xs text-brand transition-colors hover:bg-brand/10"
+        @click="router.push('/organize')"
+      >
+        整理
+      </button>
+      <button
+        type="button"
+        class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:text-text"
         @click="emit('clear')"
       >
         取消选择

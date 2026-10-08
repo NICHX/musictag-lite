@@ -1,4 +1,4 @@
-"""曲目列表/详情/facets 与未实现接口的契约（501 + 里程碑头）。"""
+"""曲目列表/详情/facets 与整理/转换接口的契约（输入校验 + 待实现里程碑头）。"""
 
 from __future__ import annotations
 
@@ -51,10 +51,10 @@ def test_covers_and_lyrics_missing_track(client) -> None:
     assert client.get("/api/tracks/999999/lyrics").status_code == 404
 
 
-def test_organize_not_implemented_m2(client) -> None:
+def test_organize_preview_requires_ids(client) -> None:
+    # 整理（F15）已于 M2 落地；缺少目标曲目 → 400
     resp = client.post("/api/organize/preview", json={"ids": [], "template": "{title}"})
-    assert resp.status_code == 501
-    assert resp.headers.get("X-Milestone") == "M2"
+    assert resp.status_code == 400
 
 
 def test_convert_without_ffmpeg(client) -> None:

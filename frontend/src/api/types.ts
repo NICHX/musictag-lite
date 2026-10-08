@@ -143,6 +143,44 @@ export interface BatchEditRequest {
   dry_run?: boolean
 }
 
+/** 整理（F15 / F11 的「标签→文件名」分支） */
+export type OrganizeStatus = 'ok' | 'unchanged' | 'conflict' | 'invalid'
+
+export interface OrganizePreviewItem {
+  track_id: number
+  source: string
+  target: string | null
+  status: OrganizeStatus
+  reason: string | null
+  sidecars: string[]
+}
+
+export interface OrganizePreviewResponse {
+  total: number
+  ok: number
+  conflicts: number
+  unchanged: number
+  invalid: number
+  items: OrganizePreviewItem[]
+}
+
+export interface OrganizeRequest {
+  ids: number[]
+  template: string
+  /** false=同级重命名（F11）；true=移动到分组目录（F15） */
+  move: boolean
+}
+
+export interface OrganizePlanItem {
+  track_id: number
+  target: string
+}
+
+export interface OrganizeApplyRequest extends OrganizeRequest {
+  /** 用户确认的 old→new 计划；后端以它为准执行 */
+  plan?: OrganizePlanItem[]
+}
+
 export interface CoverMeta {
   track_id: number
   available: boolean

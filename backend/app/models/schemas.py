@@ -356,20 +356,42 @@ class SettingsUpdate(BaseModel):
 # 组织 / 转换（P1/P2 契约占位）
 # --------------------------------------------------------------------------- #
 class OrganizePreviewRequest(BaseModel):
+    """整理预演/执行入参；``move=False`` 为同级重命名（F11），``True`` 为移动到分组目录（F15）。"""
+
     ids: list[int] = Field(default_factory=list)
     template: str = "{albumartist}/{year} - {album}/{track:02d} - {title}"
     move: bool = False
 
 
+class OrganizePlanItem(BaseModel):
+    """用户确认执行的单条计划：以它为准落盘，避免预览与执行之间出现偏差。"""
+
+    track_id: int
+    target: str
+
+
 class OrganizePreviewItem(BaseModel):
     track_id: int
     source: str
-    target: str
-    conflict: bool = False
+    target: str | None = None
+    status: Literal["ok", "unchanged", "conflict", "invalid"] = "ok"
+    reason: str | None = None
+    sidecars: list[str] = Field(default_factory=list, description="将一并处理的边车文件源路径")
 
 
 class OrganizePreviewResponse(BaseModel):
+    total: int = 0
+    ok: int = 0
+    conflicts: int = 0
+    unchanged: int = 0
+    invalid: int = 0
     items: list[OrganizePreviewItem] = Field(default_factory=list)
+
+
+class OrganizeApplyRequest(OrganizePreviewRequest):
+    """``plan`` 非空时按用户确认的目标执行；为空时后端按 ids+模板重算。"""
+
+    plan: list[OrganizePlanItem] | None = None
 
 
 class ConvertRequest(BaseModel):

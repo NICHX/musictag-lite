@@ -12,6 +12,9 @@ import type {
   Library,
   LyricsRead,
   OperationLog,
+  OrganizeApplyRequest,
+  OrganizePreviewResponse,
+  OrganizeRequest,
   Page,
   ParseFilenameResponse,
   Provider,
@@ -126,6 +129,13 @@ export const filenameApi = {
       use_ai: useAi,
       apply,
     }),
+}
+
+/** 整理（F15 / F11 的「标签→文件名」分支）：先预演，确认后按 plan 执行。 */
+export const organizeApi = {
+  preview: (body: OrganizeRequest) =>
+    api.post<OrganizePreviewResponse>('/organize/preview', body),
+  apply: (body: OrganizeApplyRequest) => api.post<TaskAccepted>('/organize/apply', body),
 }
 
 export const systemApi = {

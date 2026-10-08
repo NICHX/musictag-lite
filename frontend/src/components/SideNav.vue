@@ -10,6 +10,7 @@ const collapsed = computed(() => ui.sidebarCollapsed)
 const items = [
   { to: '/library', label: '资源库', icon: 'grid' },
   { to: '/scrape', label: '刮削中心', icon: 'spark' },
+  { to: '/organize', label: '整理', icon: 'wand' },
   { to: '/tasks', label: '任务与日志', icon: 'activity' },
   { to: '/logs', label: '操作日志', icon: 'list' },
   { to: '/settings', label: '设置', icon: 'sliders' },
@@ -65,6 +66,18 @@ const items = [
           >
             <path d="M12 3v4M12 17v4M3 12h4M17 12h4" stroke-linecap="round" />
             <circle cx="12" cy="12" r="3.5" />
+          </svg>
+          <svg
+            v-else-if="item.icon === 'wand'"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            class="h-5 w-5"
+          >
+            <path d="M14 4l6 6-9.5 9.5-6-6L14 4z" stroke-linejoin="round" />
+            <path d="M4 4l1 2 2 1-2 1-1 2-1-2-2-1 2-1 1-2z" stroke-linejoin="round" />
+            <path d="M19 15l.7 1.3L21 17l-1.3.7L19 19l-.7-1.3L17 17l1.3-.7L19 15z" stroke-linejoin="round" />
           </svg>
           <svg
             v-else-if="item.icon === 'activity'"
