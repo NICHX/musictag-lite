@@ -1,25 +1,73 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import { RouterLink, useRoute } from 'vue-router'
 
 import CoverThumb from '@/components/CoverThumb.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import SelectionBar from '@/components/SelectionBar.vue'
 import TrackInspector from '@/components/TrackInspector.vue'
+import type { Track } from '@/api/types'
 import { formatBitrate, formatDateTime, formatDuration } from '@/lib/format'
 import { useLibraryStore } from '@/stores/library'
+import { useScrapeStore } from '@/stores/scrape'
 import { useTaskStore } from '@/stores/tasks'
 import { useUiStore } from '@/stores/ui'
 
+const route = useRoute()
 const store = useLibraryStore()
 const tasks = useTaskStore()
 const ui = useUiStore()
+const scrapeStore = useScrapeStore()
 
 const keyword = ref('')
 const view = ref<'table' | 'grid'>('table')
 const activeTrackId = ref<number | null>(null)
 const scanning = ref(false)
 const notice = ref<string | null>(null)
+
+/** 从刮削页返回时定位到刚匹配的曲目 */
+const matchedTrackId = ref<number | null>(null)
+const matchedInfo = computed(() => scrapeStore.lastMatched)
+const matchedVisible = computed(() =>
+  store.tracks.some((track) => track.id === matchedTrackId.value),
+)
+
+function isMatched(track: Track): boolean {
+  return track.id === matchedTrackId.value
+}
+
+function rowStyle(track: Track): Record<string, string> | undefined {
+  const shadows: string[] = []
+  if (store.isSelected(track.id)) shadows.push('inset 2px 0 0 var(--accent-dynamic)')
+  if (isMatched(track)) shadows.push('inset 0 0 0 1px var(--brand)')
+  return shadows.length ? { boxShadow: shadows.join(', ') } : undefined
+}
+
+async function scrollToTrack(id: number): Promise<void> {
+  await nextTick()
+  document.getElementById(`track-${id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
+
+async function revealMatched(): Promise<void> {
+  const id = matchedTrackId.value
+  if (!id) return
+  if (matchedVisible.value) {
+    activeTrackId.value = id
+    return
+  }
+  const title = matchedInfo.value?.title
+  if (!title) return
+  keyword.value = title
+  store.query.q = title
+  store.query.page = 1
+  await store.loadTracks()
+  await scrollToTrack(id)
+}
+
+function dismissMatched(): void {
+  matchedTrackId.value = null
+  scrapeStore.clearLastMatched()
+}
 
 const chips = [
   { key: 'all', label: '全部' },
@@ -98,8 +146,10 @@ async function onSaved(): Promise<void> {
   await store.loadTracks()
 }
 
-onMounted(() => {
-  void store.load()
+onMounted(async () => {
+  matchedTrackId.value = Number(route.query.track) || null
+  await store.load()
+  if (matchedTrackId.value) await scrollToTrack(matchedTrackId.value)
 })
 </script>
 
@@ -204,6 +254,40 @@ onMounted(() => {
     <p v-if="notice" class="mt-3 rounded-control border border-info/40 bg-info/10 px-3 py-2 text-sm text-info">
       {{ notice }}
     </p>
+
+    <!-- 从刮削页返回：定位到刚匹配的曲目 -->
+    <div
+      v-if="matchedTrackId"
+      class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-control border border-brand/40 bg-brand/5 px-3 py-2 text-sm"
+    >
+      <span class="shrink-0 rounded-full bg-brand/15 px-2 py-0.5 text-[11px] text-brand">刚匹配</span>
+      <span class="min-w-0 truncate">
+        <template v-if="matchedInfo">
+          {{ matchedInfo.title || '（无标题）' }} — {{ matchedInfo.artist || '未知艺术家' }}
+        </template>
+        <template v-else>已定位到匹配的曲目</template>
+      </span>
+      <span v-if="matchedInfo?.fields.length" class="truncate text-xs text-muted">
+        写入：{{ matchedInfo.fields.join('、') }}
+      </span>
+      <span v-if="!matchedVisible" class="text-xs text-warning">不在当前筛选结果中</span>
+      <div class="ml-auto flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:text-text"
+          @click="revealMatched"
+        >
+          {{ matchedVisible ? '查看详情' : '搜出这首' }}
+        </button>
+        <button
+          type="button"
+          class="rounded-control px-2 py-1 text-xs text-muted transition-colors hover:text-text"
+          @click="dismissMatched"
+        >
+          关闭
+        </button>
+      </div>
+    </div>
     <p
       v-if="store.error"
       class="mt-3 rounded-control border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
@@ -261,13 +345,11 @@ onMounted(() => {
           <tbody>
             <tr
               v-for="track in store.tracks"
+              :id="`track-${track.id}`"
               :key="track.id"
               class="cursor-pointer border-b border-border/60 transition-colors hover:bg-surface-2"
-              :style="
-                store.isSelected(track.id)
-                  ? { boxShadow: 'inset 2px 0 0 var(--accent-dynamic)' }
-                  : undefined
-              "
+              :class="isMatched(track) ? 'bg-brand/5' : ''"
+              :style="rowStyle(track)"
               @click="activeTrackId = track.id"
             >
               <td class="px-3 py-2" @click.stop>
@@ -317,6 +399,7 @@ onMounted(() => {
       <div v-else class="grid grid-cols-2 gap-4 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
         <button
           v-for="track in store.tracks"
+          :id="`track-${track.id}`"
           :key="track.id"
           type="button"
           class="group text-left"
@@ -324,7 +407,13 @@ onMounted(() => {
         >
           <span
             class="block aspect-square overflow-hidden rounded-card border transition-colors"
-            :class="store.isSelected(track.id) ? 'border-brand' : 'border-border group-hover:border-brand/60'"
+            :class="
+              isMatched(track)
+                ? 'border-brand ring-2 ring-brand/40'
+                : store.isSelected(track.id)
+                  ? 'border-brand'
+                  : 'border-border group-hover:border-brand/60'
+            "
           >
             <CoverThumb :track-id="track.id" :has-cover="track.has_cover" rounded="rounded-none" />
           </span>
