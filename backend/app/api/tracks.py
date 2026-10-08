@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
-from app.api.deps import ensure_track_path, get_track_or_404, not_implemented
+from app.api.deps import ensure_track_path, get_track_or_404
 from app.audio.mutagen_io import UnsupportedFormatError
 from app.core.db import get_session
 from app.models.db import Track
@@ -27,6 +29,7 @@ from app.services import ai_config
 from app.services.ai_parser import AIUnavailableError, parse_filename_with_ai
 from app.services.filename_parser import parse_filename
 from app.services.scrape_orchestrator import scrape_orchestrator
+from app.services.stream_service import build_stream_response
 from app.services.tag_service import SOURCE_MANUAL, TagService
 
 router = APIRouter(prefix="/tracks", tags=["tracks"])
@@ -151,8 +154,18 @@ def update_track(
 
 
 @router.get("/{track_id}/stream")
-def stream_track(track_id: int):
-    raise not_implemented("M2", "音频流式试听将在 M2（P1）实现")
+def stream_track(
+    track_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    """音频试听（支持 HTTP Range，浏览器可拖动定位）。"""
+    track = get_track_or_404(session, track_id)
+    ensure_track_path(session, track)
+    path = Path(track.path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="音频文件不存在")
+    return build_stream_response(request, path)
 
 
 @router.post("/{track_id}/parse-filename", response_model=ParseFilenameResponse)

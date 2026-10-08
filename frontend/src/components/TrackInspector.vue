@@ -44,6 +44,41 @@ const parsed = ref<ParseFilenameResponse | null>(null)
 const aiAvailable = ref(false)
 let capabilitiesPromise: Promise<void> | null = null
 
+// ---- 试听（F10）----
+const audioEl = ref<HTMLAudioElement | null>(null)
+const playing = ref(false)
+const currentTime = ref(0)
+const duration = ref(0)
+const streamError = ref<string | null>(null)
+
+const streamUrl = computed(() => (track.value ? `/api/tracks/${track.value.id}/stream` : ''))
+
+function clock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0:00'
+  const total = Math.floor(seconds)
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
+function togglePlay(): void {
+  const element = audioEl.value
+  if (!element) return
+  if (element.paused) void element.play().catch(() => undefined)
+  else element.pause()
+}
+
+function seek(event: Event): void {
+  const value = Number((event.target as HTMLInputElement).value)
+  currentTime.value = value
+  if (audioEl.value) audioEl.value.currentTime = value
+}
+
+function resetPlayer(): void {
+  playing.value = false
+  currentTime.value = 0
+  duration.value = 0
+  streamError.value = null
+}
+
 function ensureCapabilities(): Promise<void> {
   if (!capabilitiesPromise) {
     capabilitiesPromise = systemApi
@@ -112,6 +147,7 @@ async function load(id: number): Promise<void> {
   message.value = null
   coverBroken.value = false
   parsed.value = null
+  resetPlayer()
   void ensureCapabilities()
   try {
     const data = await trackApi.get(id)
@@ -319,6 +355,56 @@ watch(
             </RouterLink>
           </div>
         </div>
+
+        <!-- 试听（HTTP Range 流式，无需 ffmpeg） -->
+        <div class="mt-4 flex items-center gap-3 rounded-card border border-border bg-surface-2 px-3 py-2">
+          <button
+            type="button"
+            class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand text-bg transition-colors hover:bg-brand-600 disabled:opacity-50"
+            :aria-label="playing ? '暂停' : '播放'"
+            @click="togglePlay"
+          >
+            <svg v-if="!playing" viewBox="0 0 24 24" fill="currentColor" class="ml-0.5 h-4 w-4">
+              <path d="M8 5.14v13.72L19 12 8 5.14Z" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" fill="currentColor" class="h-4 w-4">
+              <path d="M7 5h4v14H7zM13 5h4v14h-4z" />
+            </svg>
+          </button>
+
+          <span class="w-9 shrink-0 text-right font-mono text-[11px] text-muted">
+            {{ clock(currentTime) }}
+          </span>
+          <input
+            type="range"
+            min="0"
+            :max="duration || 0"
+            step="0.1"
+            :value="currentTime"
+            :disabled="!duration"
+            aria-label="播放进度"
+            class="h-1 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-border disabled:cursor-default"
+            :style="{ accentColor: 'var(--accent-dynamic)' }"
+            @input="seek"
+          />
+          <span class="w-9 shrink-0 font-mono text-[11px] text-muted">
+            {{ clock(duration) }}
+          </span>
+
+          <audio
+            ref="audioEl"
+            :src="streamUrl"
+            preload="metadata"
+            class="hidden"
+            @loadedmetadata="duration = audioEl?.duration ?? 0"
+            @timeupdate="currentTime = audioEl?.currentTime ?? 0"
+            @play="playing = true"
+            @pause="playing = false"
+            @ended="playing = false"
+            @error="streamError = '该格式无法在浏览器内直接播放（未安装 ffmpeg，属预期限制）'"
+          />
+        </div>
+        <p v-if="streamError" class="mt-1.5 text-[11px] text-muted">{{ streamError }}</p>
 
         <!-- 文件名解析（仅手动触发；预览后确认再写入） -->
         <div class="mt-5 rounded-card border border-border bg-surface-2 px-3 py-3">
