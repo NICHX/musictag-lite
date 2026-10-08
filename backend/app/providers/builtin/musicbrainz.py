@@ -71,15 +71,20 @@ class MusicBrainzProvider(HTTPProvider):
 
     @staticmethod
     def _build_query(q: ScrapeQuery) -> str:
-        parts: list[str] = []
-        title = q.title or q.filename_hint
-        if title:
-            parts.append(f'recording:"{title}"')
-        if q.artist:
-            parts.append(f'artist:"{q.artist}"')
-        if q.album:
-            parts.append(f'release:"{q.album}"')
-        return " AND ".join(parts)
+        """有标签时用字段限定查询；仅有文件名时退化为宽松通用检索。"""
+        if q.title:
+            parts = [f'recording:"{q.title}"']
+            if q.artist:
+                parts.append(f'artist:"{q.artist}"')
+            if q.album:
+                parts.append(f'release:"{q.album}"')
+            return " AND ".join(parts)
+
+        # 无标签：把文件名里的分隔符替换为空格，让 MB 跨字段模糊匹配
+        hint = (q.filename_hint or "").replace(" - ", " ").replace("_", " ").strip()
+        if q.artist and q.artist not in hint:
+            hint = f"{hint} {q.artist}".strip()
+        return hint
 
     async def fetch(self, external_id: str) -> AlbumBundle:
         """external_id 为 recording id；返回其首个 release 的规范化数据。"""

@@ -139,3 +139,40 @@ def test_build_query_strips_filename_noise(track_factory) -> None:
     track = track_factory(filename="07 - 夜曲.flac", title=None, artist=None)
     query = ScrapeOrchestrator.build_query(track)
     assert query.filename_hint == "夜曲"
+
+
+def test_musicbrainz_query_prefers_tags_then_falls_back_to_filename() -> None:
+    # 有标签 → 字段限定查询
+    tagged = MusicBrainzProvider._build_query(
+        ScrapeQuery(title="Rolling in the Deep", artist="Adele")
+    )
+    assert tagged == 'recording:"Rolling in the Deep" AND artist:"Adele"'
+
+    # 无标签 → 宽松通用检索（分隔符替换为空格）
+    untagged = MusicBrainzProvider._build_query(ScrapeQuery(filename_hint="1965 - Zella Day"))
+    assert untagged == "1965 Zella Day"
+    assert '"' not in untagged
+
+
+def test_split_filename_hint() -> None:
+    from app.providers.builtin.lrclib import split_filename_hint
+
+    assert split_filename_hint("1965 - Zella Day") == ("1965", "Zella Day")
+    assert split_filename_hint("夜曲") == ("夜曲", None)
+    assert split_filename_hint(None) == (None, None)
+
+
+async def test_lrclib_uses_filename_hint_when_no_tags() -> None:
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(dict(request.url.params))
+        return httpx.Response(200, json={"syncedLyrics": "[00:01.00]hi"})
+
+    provider = LRCLIBProvider()
+    provider.bind(_client(handler))
+    lyrics = await provider.fetch_lyrics(ScrapeQuery(filename_hint="1965 - Zella Day"))
+
+    assert lyrics is not None
+    assert seen["track_name"] == "1965"
+    assert seen["artist_name"] == "Zella Day"

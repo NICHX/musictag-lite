@@ -25,6 +25,8 @@ logger = get_logger(__name__)
 
 # 文件名开头的音轨号 / 序号噪声，如 "01 - "、"03."、"12_"
 _FILENAME_NOISE = re.compile(r"^\s*\d{1,3}[\s._-]+")
+# 分词：保留字母/数字/中日韩字符（用于与分隔符无关的覆盖率打分）
+_TOKEN_RE = re.compile(r"[0-9a-z\u4e00-\u9fff]+")
 
 
 def _similarity(left: str | None, right: str | None) -> float:
@@ -33,16 +35,38 @@ def _similarity(left: str | None, right: str | None) -> float:
     return SequenceMatcher(None, left.lower().strip(), right.lower().strip()).ratio()
 
 
+def _tokens(text: str | None) -> set[str]:
+    if not text:
+        return set()
+    return set(_TOKEN_RE.findall(text.lower()))
+
+
+def coverage_score(query_text: str | None, candidate: Candidate) -> float:
+    """查询词覆盖率：对「文件名兜底」尤其有效，且不依赖 Title/Artist 的先后顺序。"""
+    query_tokens = _tokens(query_text)
+    if not query_tokens:
+        return 0.0
+    candidate_tokens = _tokens(
+        " ".join(part for part in (candidate.title, candidate.artist, candidate.album) if part)
+    )
+    return len(query_tokens & candidate_tokens) / len(query_tokens)
+
+
 def score_candidate(candidate: Candidate, query: ScrapeQuery) -> float:
-    """综合打分：来源匹配分 + 标题/艺术家/专辑相似度 + 音轨号一致性。"""
+    """综合打分：来源匹配分 + 查询词覆盖率 + 标题/艺术家相似度 + 音轨号一致性。"""
+    query_text = (
+        " ".join(part for part in (query.title, query.artist, query.album) if part)
+        or query.filename_hint
+        or ""
+    )
     score = (
-        0.35 * candidate.score
-        + 0.30 * _similarity(query.title or query.filename_hint, candidate.title)
-        + 0.25 * _similarity(query.artist, candidate.artist)
-        + 0.10 * _similarity(query.album, candidate.album)
+        0.25 * candidate.score
+        + 0.45 * coverage_score(query_text, candidate)
+        + 0.20 * _similarity(query.title or query.filename_hint, candidate.title)
+        + 0.10 * _similarity(query.artist, candidate.artist)
     )
     if query.track_no and candidate.track_no == query.track_no:
-        score += 0.10
+        score += 0.05
     return round(min(1.0, score), 4)
 
 

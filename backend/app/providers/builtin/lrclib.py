@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.providers.base import (
@@ -15,6 +16,17 @@ from app.providers.base import (
 
 _GET = "https://lrclib.net/api/get"
 _SEARCH = "https://lrclib.net/api/search"
+_SEPARATOR = re.compile(r"\s+-\s+")
+
+
+def split_filename_hint(hint: str | None) -> tuple[str | None, str | None]:
+    """把 "标题 - 艺术家" 形式的文件名提示拆成 (标题, 艺术家)。"""
+    if not hint:
+        return None, None
+    parts = [part.strip() for part in _SEPARATOR.split(hint) if part.strip()]
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    return parts[0] if parts else None, None
 
 
 class LRCLIBProvider(HTTPProvider):
@@ -25,13 +37,17 @@ class LRCLIBProvider(HTTPProvider):
     default_priority = 30
 
     async def fetch_lyrics(self, q: ScrapeQuery) -> Lyrics | None:
-        title = q.title or q.filename_hint
+        title = q.title
+        artist = q.artist
+        if not title:
+            title, hint_artist = split_filename_hint(q.filename_hint)
+            artist = artist or hint_artist
         if not title:
             return None
 
         params: dict[str, Any] = {"track_name": title}
-        if q.artist:
-            params["artist_name"] = q.artist
+        if artist:
+            params["artist_name"] = artist
         if q.album:
             params["album_name"] = q.album
         if q.duration:
