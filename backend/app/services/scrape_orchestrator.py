@@ -194,13 +194,24 @@ class ScrapeOrchestrator:
         track: Track,
         candidate_ids: list[str],
         *,
+        candidates: list[Candidate] | None = None,
         only_missing: bool = False,
         apply_cover: bool = False,
         apply_lyrics: bool = False,
     ) -> dict[str, Any]:
-        """应用选中候选：写标签（可仅补空值）、封面、歌词。"""
+        """应用选中候选：写标签（可仅补空值）、封面、歌词。
+
+        ``candidates`` 为用户实际选中的候选；提供时直接以它为准构造 bundle。
+        否则回退到按 id 重新 ``fetch()``（注意：同一 recording 存在于多个 release，
+        重新 fetch 可能取到不同 release，从而写错专辑/年份或抓不到封面）。
+        """
         self.client()
-        bundle = await self._merge_bundles(candidate_ids)
+        picked = [item for item in (candidates or []) if item.external_id]
+        bundle = (
+            self._bundle_from_candidates(picked)
+            if picked
+            else await self._merge_bundles(candidate_ids)
+        )
 
         values = self._bundle_to_values(bundle)
         if only_missing:
@@ -243,6 +254,26 @@ class ScrapeOrchestrator:
         }
 
     # ---- 内部 ----
+    @staticmethod
+    def _bundle_from_candidates(candidates: list[Candidate]) -> AlbumBundle:
+        """直接由选中的候选构造 bundle（不重新 fetch，避免 release 漂移）。"""
+        bundle = AlbumBundle()
+        for candidate in candidates:
+            payload = candidate.payload or {}
+            for field in ("title", "artist", "album", "year", "track_no"):
+                value = getattr(candidate, field, None)
+                if getattr(bundle, field) in (None, "") and value not in (None, ""):
+                    setattr(bundle, field, value)
+            if not bundle.cover_url and candidate.cover_url:
+                bundle.cover_url = candidate.cover_url
+            release_id = payload.get("release_id")
+            if release_id and not bundle.extra.get("release_id"):
+                bundle.extra["release_id"] = release_id
+            for key, value in payload.items():
+                if value and key not in bundle.extra:
+                    bundle.extra[key] = value
+        return bundle
+
     async def _merge_bundles(self, candidate_ids: list[str]) -> AlbumBundle:
         merged = AlbumBundle()
         for uid in candidate_ids:
@@ -302,12 +333,31 @@ class ScrapeOrchestrator:
                     return cover
             except Exception as exc:  # noqa: BLE001
                 logger.warning("scrape.cover_failed", extra={"error": str(exc)})
-        if bundle.cover_url:
-            response = await self.client().get(bundle.cover_url)
-            if response.status_code == 200:
+
+        # 回退：直接按封面地址下载（含 /front 与 /front-500 变体）
+        for url in self._cover_url_variants(bundle.cover_url):
+            try:
+                response = await self.client().get(url)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "scrape.cover_download_failed", extra={"url": url, "error": str(exc)}
+                )
+                continue
+            if response.status_code == 200 and response.content:
                 mime = response.headers.get("content-type", "image/jpeg").split(";")[0].strip()
                 return CoverBytes(data=response.content, mime=mime or "image/jpeg")
         return None
+
+    @staticmethod
+    def _cover_url_variants(url: str | None) -> list[str]:
+        """CAA 的 /front 与 /front-500 互为备选，任一可用即可。"""
+        if not url:
+            return []
+        if url.endswith("/front-500"):
+            return [url, url[: -len("-500")]]
+        if url.endswith("/front"):
+            return [url, f"{url}-500"]
+        return [url]
 
     async def _fetch_lyrics(self, session: Session | None, track: Track) -> str | None:
         query = self.build_query(track, self.known_artists(session))

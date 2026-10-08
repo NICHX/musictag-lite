@@ -175,3 +175,50 @@ def test_parse_filename_preview_then_apply(client, library) -> None:
     )
     assert ai.status_code == 400
     assert "AI" in ai.json()["detail"]
+
+
+def test_scrape_apply_uses_selected_candidate_without_refetch(client, library) -> None:
+    """apply 必须以选中的候选为准（不再按 id 重新 fetch，避免 release 漂移）。
+
+    该用例不提供任何网络 mock：若实现回退去 fetch，就会因无网络而失败，
+    因此它同时锁定了「候选优先」这一行为。
+    """
+    lib_id = library["id"]
+    _scan(client, lib_id)
+    page = client.get("/api/tracks", params={"library_id": lib_id}).json()
+    flac = next(t for t in page["items"] if t["filename"].endswith("01 Rolling.flac"))
+
+    response = client.post(
+        "/api/scrape/apply",
+        json={
+            "track_id": flac["id"],
+            "candidate_ids": ["musicbrainz:rec-1965"],
+            "candidates": [
+                {
+                    "provider": "musicbrainz",
+                    "external_id": "rec-1965",
+                    "title": "Rolling in the Deep",
+                    "artist": "Adele",
+                    "album": "Kicker",
+                    "year": "2015",
+                    "track_no": 1,
+                    "score": 1.0,
+                    "cover_url": None,
+                    "payload": {"release_id": "rel-kicker"},
+                }
+            ],
+            "only_missing": False,
+            "apply_cover": False,
+            "apply_lyrics": False,
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    changed = {item["field"]: item["new_value"] for item in response.json()["diffs"]}
+    # 专辑/年份来自选中候选，而不是某个重新 fetch 到的 release
+    assert changed["album"] == "Kicker"
+    assert changed["year"] == "2015"
+
+    written = io.read(Path(flac["path"])).tags
+    assert written.album == "Kicker"
+    assert written.title == "Rolling in the Deep"

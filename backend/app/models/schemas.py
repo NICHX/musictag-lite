@@ -268,6 +268,14 @@ class ScrapeSearchResponse(BaseModel):
 class ScrapeApplyRequest(BaseModel):
     track_id: int
     candidate_ids: list[str] = Field(default_factory=list, description="形如 provider:external_id")
+    candidates: list[CandidateRead] = Field(
+        default_factory=list,
+        description=(
+            "用户实际选中的候选。优先使用它而非按 id 重新 fetch："
+            "同一 recording 会出现在多个 release 上，重新 fetch 会取到不同的 release，"
+            "导致专辑/年份写错、封面抓不到。"
+        ),
+    )
     only_missing: bool = False
     apply_cover: bool = False
     apply_lyrics: bool = False

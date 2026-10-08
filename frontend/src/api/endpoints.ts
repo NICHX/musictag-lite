@@ -93,6 +93,8 @@ export const scrapeApi = {
   apply: (body: {
     track_id: number
     candidate_ids: string[]
+    /** 选中的候选本身：后端以此为准，避免按 id 重新 fetch 造成 release 漂移 */
+    candidates?: Candidate[]
     only_missing?: boolean
     apply_cover?: boolean
     apply_lyrics?: boolean

@@ -125,9 +125,11 @@ async function apply(): Promise<void> {
   applying.value = true
   error.value = null
   try {
+    const picked = chosenCandidate.value
     applied.value = await scrapeApi.apply({
       track_id: trackId,
-      candidate_ids: [chosenUid.value],
+      candidate_ids: picked ? [scrapeApi.list(picked)] : [],
+      candidates: picked ? [picked] : [],
       only_missing: onlyMissing.value,
       apply_cover: applyCover.value,
       apply_lyrics: applyLyrics.value,

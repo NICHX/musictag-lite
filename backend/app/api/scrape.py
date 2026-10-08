@@ -23,7 +23,7 @@ from app.models.schemas import (
     ScrapeSearchResponse,
     TaskAccepted,
 )
-from app.providers.base import ScrapeQuery
+from app.providers.base import Candidate, ScrapeQuery
 from app.services.scrape_orchestrator import scrape_orchestrator
 
 router = APIRouter(prefix="/scrape", tags=["scrape"])
@@ -84,6 +84,22 @@ async def apply(
         session,
         track,
         payload.candidate_ids,
+        candidates=[
+            Candidate(
+                provider=item.provider,
+                external_id=item.external_id,
+                title=item.title,
+                artist=item.artist,
+                album=item.album,
+                year=item.year,
+                track_no=item.track_no,
+                score=item.score,
+                cover_url=item.cover_url,
+                payload=item.payload,
+            )
+            for item in payload.candidates
+        ]
+        or None,
         only_missing=payload.only_missing,
         apply_cover=payload.apply_cover,
         apply_lyrics=payload.apply_lyrics,
@@ -131,6 +147,7 @@ async def create_job(payload: ScrapeJobCreateRequest) -> TaskAccepted:
                                 session,
                                 track,
                                 [candidates[0].uid],
+                                candidates=[candidates[0]],
                                 only_missing=payload.only_missing,
                                 apply_cover=True,
                             )
