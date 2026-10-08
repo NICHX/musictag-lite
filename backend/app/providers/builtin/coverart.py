@@ -1,30 +1,36 @@
-"""Cover Art Archive 封面源（基于 MusicBrainz release mbid）。
-
-M1 实现：``coverartarchive.org/release/{mbid}`` 拉取 front 封面。
-"""
+"""Cover Art Archive 封面源（基于 MusicBrainz release mbid）。"""
 
 from __future__ import annotations
 
-from app.providers.base import AlbumBundle, Candidate, CoverBytes, Lyrics, ScrapeQuery
+from app.providers.base import (
+    AlbumBundle,
+    Candidate,
+    CoverBytes,
+    HTTPProvider,
+    Lyrics,
+    ScrapeQuery,
+)
 
-_MILESTONE = "该 Provider 能力将在 M1 实现"
+_FRONT = "https://coverartarchive.org/release/{mbid}/front-500"
 
 
-class CoverArtArchiveProvider:
+class CoverArtArchiveProvider(HTTPProvider):
     key = "coverart"
     name = "Cover Art Archive"
     capabilities = {"cover"}
     default_enabled = True
     default_priority = 20
+    min_interval = 1.0
+
+    async def fetch_cover(self, external_id: str) -> CoverBytes | None:
+        """external_id 为 MusicBrainz release mbid。"""
+        return await self._get_bytes(_FRONT.format(mbid=external_id))
 
     async def search(self, q: ScrapeQuery) -> list[Candidate]:
         return []
 
     async def fetch(self, external_id: str) -> AlbumBundle:
-        raise NotImplementedError(_MILESTONE)
-
-    async def fetch_cover(self, external_id: str) -> CoverBytes | None:
-        raise NotImplementedError(_MILESTONE)
+        return AlbumBundle()
 
     async def fetch_lyrics(self, q: ScrapeQuery) -> Lyrics | None:
         return None

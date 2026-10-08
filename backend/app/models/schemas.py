@@ -173,7 +173,7 @@ class BatchEditRequest(BaseModel):
     ids: list[int] = Field(min_length=1)
     ops: list[BatchEditOp] = Field(min_length=1)
     strategy: Literal["overwrite", "fill_empty", "append", "replace"] = "overwrite"
-    dry_run: bool = True
+    dry_run: bool = False
 
 
 class FieldDiff(BaseModel):

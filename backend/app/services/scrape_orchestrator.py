@@ -1,51 +1,286 @@
-"""刮削编排：并发查询多 Provider、打分合并、应用候选（F7 / §9.4）。M1 实现。"""
+"""刮削编排：并发查询多 Provider、打分合并、应用候选（F7 / §9.4）。"""
 
 from __future__ import annotations
 
-import httpx
+import asyncio
+import re
+from difflib import SequenceMatcher
+from pathlib import Path
+from typing import Any
 
+import httpx
+from sqlmodel import Session, select
+
+from app.audio.base import CoverImage
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.providers.base import Candidate, ScrapeQuery
+from app.models.db import ProviderConfig, Track
+from app.providers.base import AlbumBundle, Candidate, CoverBytes, ScrapeQuery
 from app.providers.registry import ProviderRegistry, provider_registry
-
-_MILESTONE = "刮削编排将在 M1 实现"
+from app.services.cover_service import CoverService
+from app.services.lyrics_service import LyricsService
+from app.services.tag_service import SOURCE_SCRAPE, TagService
 
 logger = get_logger(__name__)
 
+# 文件名开头的音轨号 / 序号噪声，如 "01 - "、"03."、"12_"
+_FILENAME_NOISE = re.compile(r"^\s*\d{1,3}[\s._-]+")
+
+
+def _similarity(left: str | None, right: str | None) -> float:
+    if not left or not right:
+        return 0.0
+    return SequenceMatcher(None, left.lower().strip(), right.lower().strip()).ratio()
+
+
+def score_candidate(candidate: Candidate, query: ScrapeQuery) -> float:
+    """综合打分：来源匹配分 + 标题/艺术家/专辑相似度 + 音轨号一致性。"""
+    score = (
+        0.35 * candidate.score
+        + 0.30 * _similarity(query.title or query.filename_hint, candidate.title)
+        + 0.25 * _similarity(query.artist, candidate.artist)
+        + 0.10 * _similarity(query.album, candidate.album)
+    )
+    if query.track_no and candidate.track_no == query.track_no:
+        score += 0.10
+    return round(min(1.0, score), 4)
+
 
 class ScrapeOrchestrator:
-    """统一出口：所有 Provider 共用同一 httpx 客户端（超时/重试/限流/缓存）。"""
+    """统一出口：所有 Provider 共用同一 httpx 客户端（超时/UA/限流）。"""
 
     def __init__(self, registry: ProviderRegistry | None = None) -> None:
         self.registry = registry or provider_registry
         self._settings = get_settings()
         self._client: httpx.AsyncClient | None = None
 
+    # ---- 网络客户端 ----
     def client(self) -> httpx.AsyncClient:
-        """惰性创建共享的异步 HTTP 客户端。"""
-        if self._client is None:
+        if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 timeout=self._settings.http_timeout,
                 headers={"User-Agent": self._settings.musicbrainz_user_agent},
                 follow_redirects=True,
             )
+            self._bind_providers()
         return self._client
+
+    def _bind_providers(self) -> None:
+        if self._client is None:
+            return
+        for provider in self.registry.all():
+            bind = getattr(provider, "bind", None)
+            if callable(bind):
+                bind(self._client)
 
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
 
+    # ---- 查询 ----
+    @staticmethod
+    def build_query(track: Track) -> ScrapeQuery:
+        """构造查询：优先已有标签，兜底解析文件名。"""
+        stem = Path(track.filename).stem
+        hint = _FILENAME_NOISE.sub("", stem).strip() or stem
+        return ScrapeQuery(
+            title=track.title,
+            artist=track.artist,
+            album=track.album,
+            track_no=track.track_no,
+            duration=int(track.duration) if track.duration else None,
+            filename_hint=hint,
+        )
+
+    def select_providers(
+        self,
+        session: Session | None,
+        capability: str,
+        providers: list[str] | None = None,
+    ) -> list[Any]:
+        """按能力与启用状态筛选 Provider（注册表默认值 + DB 覆盖）。"""
+        configs: dict[str, ProviderConfig] = {}
+        if session is not None:
+            configs = {c.provider_key: c for c in session.exec(select(ProviderConfig)).all()}
+        chosen: list[Any] = []
+        for provider in self.registry.by_capability(capability):
+            if providers is not None and provider.key not in providers:
+                continue
+            config = configs.get(provider.key)
+            enabled = config.enabled if config else provider.default_enabled
+            if enabled:
+                chosen.append(provider)
+        return chosen
+
     async def search(
-        self, query: ScrapeQuery, providers: list[str] | None = None
+        self,
+        session: Session,
+        query: ScrapeQuery,
+        *,
+        providers: list[str] | None = None,
+        limit: int = 10,
     ) -> list[Candidate]:
-        raise NotImplementedError(_MILESTONE)
+        """并发查询多个元数据源，合并并打分排序。"""
+        chosen = self.select_providers(session, "metadata", providers)
+        if not chosen:
+            return []
+        self.client()
+        results = await asyncio.gather(
+            *(provider.search(query) for provider in chosen), return_exceptions=True
+        )
+
+        candidates: list[Candidate] = []
+        for provider, result in zip(chosen, results, strict=False):
+            if isinstance(result, Exception):
+                logger.warning(
+                    "scrape.search_failed",
+                    extra={"provider": provider.key, "error": str(result)},
+                )
+                continue
+            candidates.extend(result)
+
+        for candidate in candidates:
+            candidate.score = score_candidate(candidate, query)
+        candidates.sort(key=lambda item: item.score, reverse=True)
+        return candidates[:limit]
 
     async def apply(
-        self, track_id: int, candidate_ids: list[str], *, only_missing: bool = False
-    ) -> list[str]:
-        raise NotImplementedError(_MILESTONE)
+        self,
+        session: Session,
+        track: Track,
+        candidate_ids: list[str],
+        *,
+        only_missing: bool = False,
+        apply_cover: bool = False,
+        apply_lyrics: bool = False,
+    ) -> dict[str, Any]:
+        """应用选中候选：写标签（可仅补空值）、封面、歌词。"""
+        self.client()
+        bundle = await self._merge_bundles(candidate_ids)
+
+        values = self._bundle_to_values(bundle)
+        if only_missing:
+            values = {
+                key: value
+                for key, value in values.items()
+                if getattr(track, key, None) in (None, "")
+            }
+
+        diffs: list[dict[str, Any]] = []
+        if values:
+            diffs = TagService().apply_single(session, track, values, source=SOURCE_SCRAPE)
+
+        cover_applied = False
+        if apply_cover:
+            cover = await self._fetch_cover(bundle)
+            if cover is not None:
+                CoverService().write(
+                    session,
+                    track,
+                    CoverImage(data=cover.data, mime=cover.mime),
+                    source=SOURCE_SCRAPE,
+                )
+                cover_applied = True
+
+        lyrics_applied = False
+        if apply_lyrics:
+            content = await self._fetch_lyrics(session, track)
+            if content:
+                LyricsService().write(
+                    session, track, content, target="embedded", source=SOURCE_SCRAPE
+                )
+                lyrics_applied = True
+
+        return {
+            "applied_fields": [item["field"] for item in diffs],
+            "diffs": diffs,
+            "cover_applied": cover_applied,
+            "lyrics_applied": lyrics_applied,
+        }
+
+    # ---- 内部 ----
+    async def _merge_bundles(self, candidate_ids: list[str]) -> AlbumBundle:
+        merged = AlbumBundle()
+        for uid in candidate_ids:
+            provider_key, _, external_id = uid.partition(":")
+            provider = self.registry.get(provider_key)
+            if provider is None or not external_id:
+                continue
+            try:
+                fetched = await provider.fetch(external_id)
+            except Exception as exc:  # noqa: BLE001 - 单源失败不影响其他源
+                logger.warning(
+                    "scrape.fetch_failed",
+                    extra={"provider": provider_key, "external_id": external_id, "error": str(exc)},
+                )
+                continue
+            for field in (
+                "title",
+                "artist",
+                "album",
+                "album_artist",
+                "year",
+                "genre",
+                "track_no",
+                "disc_no",
+            ):
+                if getattr(merged, field) in (None, "") and getattr(fetched, field) not in (
+                    None,
+                    "",
+                ):
+                    setattr(merged, field, getattr(fetched, field))
+            if not merged.cover_url and fetched.cover_url:
+                merged.cover_url = fetched.cover_url
+            merged.extra.update({k: v for k, v in fetched.extra.items() if v})
+        return merged
+
+    @staticmethod
+    def _bundle_to_values(bundle: AlbumBundle) -> dict[str, Any]:
+        mapping = {
+            "title": bundle.title,
+            "artist": bundle.artist,
+            "album": bundle.album,
+            "album_artist": bundle.album_artist,
+            "year": bundle.year,
+            "genre": bundle.genre,
+            "track_no": bundle.track_no,
+            "disc_no": bundle.disc_no,
+        }
+        return {key: value for key, value in mapping.items() if value not in (None, "")}
+
+    async def _fetch_cover(self, bundle: AlbumBundle) -> CoverBytes | None:
+        coverart = self.registry.get("coverart")
+        release_id = bundle.extra.get("release_id")
+        if coverart is not None and release_id:
+            try:
+                cover = await coverart.fetch_cover(str(release_id))
+                if cover is not None:
+                    return cover
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("scrape.cover_failed", extra={"error": str(exc)})
+        if bundle.cover_url:
+            response = await self.client().get(bundle.cover_url)
+            if response.status_code == 200:
+                mime = response.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+                return CoverBytes(data=response.content, mime=mime or "image/jpeg")
+        return None
+
+    async def _fetch_lyrics(self, session: Session | None, track: Track) -> str | None:
+        query = self.build_query(track)
+        for provider in self.select_providers(session, "lyrics"):
+            try:
+                lyrics = await provider.fetch_lyrics(query)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "scrape.lyrics_failed",
+                    extra={"provider": provider.key, "error": str(exc)},
+                )
+                continue
+            if lyrics is not None and lyrics.content:
+                return lyrics.content
+        return None
 
 
+# 全局单例
 scrape_orchestrator = ScrapeOrchestrator()

@@ -7,10 +7,12 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, func, select
 
-from app.api.deps import not_implemented
+from app.core.config import get_settings
 from app.core.db import get_session
+from app.core.tasks import task_manager
 from app.models.db import Library, Track
 from app.models.schemas import LibraryCreate, LibraryRead, LibraryUpdate, TaskAccepted
+from app.services.scanner import Scanner
 
 router = APIRouter(prefix="/libraries", tags=["libraries"])
 
@@ -93,6 +95,23 @@ def delete_library(library_id: int, session: Session = Depends(get_session)) -> 
 
 
 @router.post("/{library_id}/scan", response_model=TaskAccepted)
-def scan_library(library_id: int, session: Session = Depends(get_session)) -> TaskAccepted:
-    _get_or_404(session, library_id)
-    raise not_implemented("M1", "目录扫描（含增量）将在 M1 实现")
+async def scan_library(library_id: int, session: Session = Depends(get_session)) -> TaskAccepted:
+    """触发一次扫描（增量或全量，依库的 scan_mode），返回 task_id。"""
+    library = _get_or_404(session, library_id)
+    settings = get_settings()
+    scanner = Scanner(
+        extensions=settings.scan_extensions,
+        ignore_names=settings.scan_ignore_names,
+    )
+    full = library.scan_mode == "full"
+    library_name = library.name
+
+    async def runner(ctx) -> None:  # noqa: ANN001
+        stats = await scanner.scan_library(library_id, full=full, ctx=ctx)
+        await ctx.message(
+            f"「{library_name}」扫描完成：更新 {stats.scanned}，未变 {stats.unchanged}，"
+            f"失败 {stats.failed}，移除 {stats.removed}"
+        )
+
+    task_id = await task_manager.run("scan", runner)
+    return TaskAccepted(task_id=task_id)

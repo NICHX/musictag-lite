@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 def test_tracks_list_empty_page(client) -> None:
-    resp = client.get("/api/tracks")
+    resp = client.get("/api/tracks", params={"library_id": 999999})
     assert resp.status_code == 200
     body = resp.json()
     assert body["items"] == []
@@ -38,15 +38,17 @@ def test_track_not_found(client) -> None:
     assert client.get("/api/tracks/424242").status_code == 404
 
 
-def test_scrape_search_not_implemented(client) -> None:
-    resp = client.post("/api/scrape/search", json={"track_id": 1})
-    assert resp.status_code == 501
-    assert resp.headers.get("X-Milestone") == "M1"
+def test_scrape_search_requires_track_or_query(client) -> None:
+    # 缺少查询条件 → 400
+    assert client.post("/api/scrape/search", json={}).status_code == 400
+    # 曲目不存在 → 404（刮削搜索已在 M1 实现，此处不触发网络）
+    assert client.post("/api/scrape/search", json={"track_id": 999999}).status_code == 404
 
 
-def test_covers_and_lyrics_not_implemented(client) -> None:
-    assert client.get("/api/tracks/1/cover").status_code == 501
-    assert client.get("/api/tracks/1/lyrics").status_code == 501
+def test_covers_and_lyrics_missing_track(client) -> None:
+    # 曲目不存在 → 404（封面/歌词读写已在 M1 实现）
+    assert client.get("/api/tracks/999999/cover").status_code == 404
+    assert client.get("/api/tracks/999999/lyrics").status_code == 404
 
 
 def test_organize_not_implemented_m2(client) -> None:

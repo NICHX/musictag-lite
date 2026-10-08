@@ -38,6 +38,6 @@ def test_settings_roundtrip(client) -> None:
 
 
 def test_logs_empty_page(client) -> None:
-    resp = client.get("/api/logs")
+    resp = client.get("/api/logs", params={"track_id": 999999})
     assert resp.status_code == 200
     assert resp.json()["items"] == []

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
+
+import httpx
 
 Capability = str  # "metadata" | "cover" | "lyrics" | "fingerprint"
 
@@ -95,3 +99,61 @@ class MetadataProvider(Protocol):
     async def fetch_lyrics(self, q: ScrapeQuery) -> Lyrics | None: ...
 
     async def identify(self, fingerprint: str, duration: int) -> list[Candidate]: ...
+
+
+class HTTPProvider:
+    """带共享 httpx 客户端与限速能力的 Provider 基类。
+
+    网络层统一出口（§9.3）：所有 Provider 复用同一个 AsyncClient，
+    集中处理超时 / User-Agent / 重试 / 限流。
+    """
+
+    key: str = "provider"
+    name: str = "Provider"
+    capabilities: set[Capability] = set()
+    default_enabled: bool = False
+    default_priority: int = 100
+    min_interval: float = 0.0  # 两次请求的最小间隔（秒），用于限速
+
+    def __init__(self) -> None:
+        self._client: httpx.AsyncClient | None = None
+        self._lock = asyncio.Lock()
+        self._last_call = 0.0
+
+    def bind(self, client: httpx.AsyncClient) -> None:
+        self._client = client
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            raise RuntimeError(f"Provider {self.key} 尚未绑定 HTTP 客户端")
+        return self._client
+
+    async def _throttle(self) -> None:
+        if self.min_interval <= 0:
+            return
+        async with self._lock:
+            elapsed = time.monotonic() - self._last_call
+            wait = self.min_interval - elapsed
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_call = time.monotonic()
+
+    async def _get_json(self, url: str, params: dict[str, Any] | None = None) -> Any | None:
+        """GET JSON；404 返回 None，其余非 2xx 抛出。"""
+        await self._throttle()
+        response = await self.client.get(url, params=params)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+
+    async def _get_bytes(self, url: str, params: dict[str, Any] | None = None) -> CoverBytes | None:
+        """GET 二进制（用于封面）；404 返回 None。"""
+        await self._throttle()
+        response = await self.client.get(url, params=params)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        mime = response.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+        return CoverBytes(data=response.content, mime=mime or "image/jpeg")

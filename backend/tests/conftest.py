@@ -45,3 +45,16 @@ def music_dir(tmp_path: Path) -> Path:
     (tmp_path / "Artist" / "Album" / ".hidden.mp3").write_bytes(b"hidden")
     (tmp_path / "Artist" / "Album" / "notes.txt").write_text("ignore me")
     return tmp_path
+
+
+@pytest.fixture
+def track_factory():
+    """构造内存中的 Track 对象（不落库），便于纯函数测试。"""
+    from app.models.db import Track
+
+    def _make(**kwargs):
+        defaults = {"library_id": 1, "path": "/music/song.flac", "filename": "song.flac"}
+        defaults.update(kwargs)
+        return Track(**defaults)
+
+    return _make

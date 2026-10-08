@@ -1,13 +1,16 @@
-"""歌词服务：内嵌歌词 + .lrc 边车读取/写入，LRC 时间轴校验（F6）。
-
-M0 提供 LRC 校验纯函数；读写落盘在 M1 完成。
-"""
+"""歌词服务：内嵌歌词 + .lrc 边车读取/写入，LRC 时间轴校验（F6）。"""
 
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
-_MILESTONE = "歌词读写将在 M1 实现"
+from sqlmodel import Session
+
+from app.audio.base import AudioIO
+from app.audio.mutagen_io import audio_io
+from app.models.db import Track, utcnow
+from app.services import oplog
 
 # 形如 [mm:ss.xx] 或 [mm:ss]
 _LRC_TIME_RE = re.compile(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]")
@@ -24,12 +27,55 @@ def is_lrc(content: str) -> bool:
     return validate_lrc(content)
 
 
+def lrc_path_for(track: Track) -> Path:
+    return Path(track.path).with_suffix(".lrc")
+
+
 class LyricsService:
-    """歌词读写（M1 实现）。"""
+    """歌词读取与写入。"""
 
-    def read(self, track_id: int) -> tuple[str | None, str | None]:
-        """返回 (content, source)。"""
-        raise NotImplementedError(_MILESTONE)
+    def __init__(self, audio: AudioIO | None = None) -> None:
+        self.audio = audio or audio_io
 
-    def write(self, track_id: int, content: str, *, target: str = "embedded") -> None:
-        raise NotImplementedError(_MILESTONE)
+    def read(self, track: Track) -> tuple[str | None, str | None]:
+        """返回 (歌词, 来源)：优先内嵌，其次同名 .lrc。"""
+        try:
+            embedded = self.audio.read_lyrics(Path(track.path))
+        except Exception:  # noqa: BLE001
+            embedded = None
+        if embedded:
+            return embedded, "embedded"
+
+        sidecar = lrc_path_for(track)
+        if sidecar.is_file():
+            return sidecar.read_text(encoding="utf-8", errors="replace"), "lrc"
+        return None, None
+
+    def write(
+        self,
+        session: Session,
+        track: Track,
+        content: str,
+        *,
+        target: str = "embedded",
+        source: str = "manual",
+    ) -> None:
+        """写入歌词；target ∈ {embedded, lrc, both}。"""
+        if target in {"embedded", "both"}:
+            self.audio.write_lyrics(Path(track.path), content)
+        if target in {"lrc", "both"}:
+            lrc_path_for(track).write_text(content, encoding="utf-8")
+
+        track.has_lyrics = True
+        track.updated_at = utcnow()
+        session.add(track)
+        oplog.record(
+            session,
+            track_id=track.id,
+            action="lyrics.write",
+            field="lyrics",
+            new=f"{target} ({len(content)} 字)",
+            source=source,
+        )
+        session.commit()
+        session.refresh(track)

@@ -41,10 +41,10 @@ def test_library_crud(client, music_dir: Path) -> None:
     assert updated["name"] == "重命名库"
     assert updated["root_path"] == str(music_dir.resolve())
 
-    # 扫描尚未实现（M1）
+    # 触发扫描：返回后台任务（M1）
     scan = client.post(f"/api/libraries/{library_id}/scan")
-    assert scan.status_code == 501
-    assert scan.headers.get("X-Milestone") == "M1"
+    assert scan.status_code == 200
+    assert isinstance(scan.json()["task_id"], int)
 
     # 删除
     assert client.delete(f"/api/libraries/{library_id}").status_code == 204

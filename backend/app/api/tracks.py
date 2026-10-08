@@ -8,10 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
-from app.api.deps import not_implemented
+from app.api.deps import ensure_track_path, get_track_or_404, not_implemented
+from app.audio.mutagen_io import UnsupportedFormatError
 from app.core.db import get_session
 from app.models.db import Track
 from app.models.schemas import Page, TrackFacets, TrackRead, TrackUpdate
+from app.services.tag_service import SOURCE_MANUAL, TagService
 
 router = APIRouter(prefix="/tracks", tags=["tracks"])
 
@@ -120,9 +122,18 @@ def get_track(track_id: int, session: Session = Depends(get_session)) -> TrackRe
 def update_track(
     track_id: int, payload: TrackUpdate, session: Session = Depends(get_session)
 ) -> TrackRead:
-    if session.get(Track, track_id) is None:
-        raise HTTPException(status_code=404, detail="曲目不存在")
-    raise not_implemented("M1", "单条标签写入（mutagen 落盘）将在 M1 实现")
+    """单条编辑：写入标签落盘并记录日志。"""
+    track = get_track_or_404(session, track_id)
+    ensure_track_path(session, track)
+
+    values = payload.model_dump(exclude_unset=True)
+    try:
+        TagService().apply_single(session, track, values, source=SOURCE_MANUAL)
+    except UnsupportedFormatError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"写入失败：{exc}") from exc
+    return TrackRead.model_validate(track)
 
 
 @router.get("/{track_id}/stream")
