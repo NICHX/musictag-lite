@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from app.providers.base import (
@@ -12,21 +11,13 @@ from app.providers.base import (
     HTTPProvider,
     Lyrics,
     ScrapeQuery,
+    split_filename_hint,
 )
 
 _GET = "https://lrclib.net/api/get"
 _SEARCH = "https://lrclib.net/api/search"
-_SEPARATOR = re.compile(r"\s+-\s+")
 
-
-def split_filename_hint(hint: str | None) -> tuple[str | None, str | None]:
-    """把 "标题 - 艺术家" 形式的文件名提示拆成 (标题, 艺术家)。"""
-    if not hint:
-        return None, None
-    parts = [part.strip() for part in _SEPARATOR.split(hint) if part.strip()]
-    if len(parts) >= 2:
-        return parts[0], parts[1]
-    return parts[0] if parts else None, None
+__all__ = ["LRCLIBProvider", "split_filename_hint"]
 
 
 class LRCLIBProvider(HTTPProvider):

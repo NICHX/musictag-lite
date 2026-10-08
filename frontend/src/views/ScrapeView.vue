@@ -167,6 +167,12 @@ onMounted(async () => {
       <div class="rounded-card border border-border bg-surface p-4">
         <h2 class="text-xs font-medium uppercase tracking-wide text-muted">当前曲目</h2>
         <dl v-if="currentTrack" class="mt-3 space-y-2 text-sm">
+          <div class="flex gap-3">
+            <dt class="w-16 shrink-0 text-xs text-muted">文件名</dt>
+            <dd class="min-w-0 truncate font-mono text-xs" :title="currentTrack.filename">
+              {{ currentTrack.filename }}
+            </dd>
+          </div>
           <div v-for="field in DIFF_FIELDS" :key="field.key" class="flex gap-3">
             <dt class="w-16 shrink-0 text-xs text-muted">{{ field.label }}</dt>
             <dd class="min-w-0 truncate">{{ valueOf(currentTrack, field.key) }}</dd>

@@ -247,6 +247,7 @@ onMounted(() => {
                 />
               </th>
               <th class="w-12 px-3 py-2 font-medium">封面</th>
+              <th class="px-3 py-2 font-medium">文件名</th>
               <th class="px-3 py-2 font-medium">标题</th>
               <th class="px-3 py-2 font-medium">艺术家</th>
               <th class="px-3 py-2 font-medium">专辑</th>
@@ -280,6 +281,14 @@ onMounted(() => {
               <td class="px-3 py-2">
                 <span class="block h-9 w-9">
                   <CoverThumb :track-id="track.id" :has-cover="track.has_cover" />
+                </span>
+              </td>
+              <td class="px-3 py-2">
+                <span
+                  class="block max-w-[18rem] truncate font-mono text-xs text-muted"
+                  :title="track.filename"
+                >
+                  {{ track.filename }}
                 </span>
               </td>
               <td class="px-3 py-2">{{ track.title || '—' }}</td>

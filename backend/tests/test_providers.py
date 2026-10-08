@@ -14,6 +14,25 @@ from app.providers.builtin.musicbrainz import MusicBrainzProvider
 from app.services.scrape_orchestrator import score_candidate
 
 
+def _mb_rec(
+    rec_id: str,
+    title: str,
+    artist: str,
+    album: str | None = None,
+    year: str | None = None,
+    score: int = 100,
+) -> dict:
+    item: dict = {
+        "id": rec_id,
+        "title": title,
+        "score": score,
+        "artist-credit": [{"name": artist}],
+    }
+    if album or year:
+        item["releases"] = [{"id": f"rel-{rec_id}", "title": album, "date": year}]
+    return item
+
+
 def _client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
@@ -141,17 +160,107 @@ def test_build_query_strips_filename_noise(track_factory) -> None:
     assert query.filename_hint == "夜曲"
 
 
-def test_musicbrainz_query_prefers_tags_then_falls_back_to_filename() -> None:
-    # 有标签 → 字段限定查询
-    tagged = MusicBrainzProvider._build_query(
+def test_musicbrainz_build_queries() -> None:
+    # 有标签 → 单条字段限定查询
+    tagged = MusicBrainzProvider._build_queries(
         ScrapeQuery(title="Rolling in the Deep", artist="Adele")
     )
-    assert tagged == 'recording:"Rolling in the Deep" AND artist:"Adele"'
+    assert tagged == ['recording:"Rolling in the Deep" AND artist:"Adele"']
 
-    # 无标签 → 宽松通用检索（分隔符替换为空格）
-    untagged = MusicBrainzProvider._build_query(ScrapeQuery(filename_hint="1965 - Zella Day"))
-    assert untagged == "1965 Zella Day"
-    assert '"' not in untagged
+    # 无标签 + 「A - B」 → 两种顺序各一条（兼容 Title-Artist 与 Artist-Title）
+    untagged = MusicBrainzProvider._build_queries(ScrapeQuery(filename_hint="1965 - Zella Day"))
+    assert untagged == [
+        'recording:"1965" AND artist:"Zella Day"',
+        'recording:"Zella Day" AND artist:"1965"',
+    ]
+
+    # 无分隔符 → 宽松检索兜底
+    assert MusicBrainzProvider._build_queries(ScrapeQuery(filename_hint="夜曲")) == ["夜曲"]
+
+
+async def test_musicbrainz_search_stops_after_first_hit() -> None:
+    """第一种解释命中后不再发第二次查询（省一次请求）。"""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.params.get("query", ""))
+        return httpx.Response(
+            200,
+            json={
+                "recordings": [
+                    _mb_rec("r1", "1965", "Zella Day", album="Kicker", year="2015-06-01"),
+                    _mb_rec("r1", "1965", "Zella Day"),  # 重复 id，验证去重
+                ]
+            },
+        )
+
+    provider = MusicBrainzProvider()
+    provider.bind(_client(handler))
+    results = await provider.search(ScrapeQuery(filename_hint="1965 - Zella Day"))
+
+    assert len(calls) == 1
+    assert [item.external_id for item in results] == ["r1"]
+
+
+async def test_musicbrainz_tries_second_order_when_first_empty() -> None:
+    """文件名是「艺术家 - 标题」时，第一种解释为空，应再试第二种。"""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        query = request.url.params.get("query", "")
+        calls.append(query)
+        if 'recording:"Levitating"' in query:  # 第二种解释（把 Levitating 当标题）
+            return httpx.Response(
+                200, json={"recordings": [_mb_rec("r9", "Levitating", "Dua Lipa")]}
+            )
+        return httpx.Response(200, json={"recordings": []})
+
+    provider = MusicBrainzProvider()
+    provider.bind(_client(handler))
+    results = await provider.search(ScrapeQuery(filename_hint="Dua Lipa - Levitating"))
+
+    assert [item.title for item in results] == ["Levitating"]
+    assert len(calls) == 2
+
+
+async def test_musicbrainz_falls_back_to_filename_when_tags_yield_nothing() -> None:
+    """标签里的艺术家拼写有误时，应回退到文件名解析再查。"""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        query = request.url.params.get("query", "")
+        calls.append(query)
+        if 'artist:"Zella Day"' in query:
+            return httpx.Response(200, json={"recordings": [_mb_rec("r1", "1965", "Zella Day")]})
+        return httpx.Response(200, json={"recordings": []})
+
+    provider = MusicBrainzProvider()
+    provider.bind(_client(handler))
+    # 用户把艺术家填成了 Zelly Day（拼写错误），文件名才是对的
+    query = ScrapeQuery(title="1965", artist="Zelly Day", filename_hint="1965 - Zella Day")
+    results = await provider.search(query)
+
+    assert [item.title for item in results] == ["1965"]
+    assert len(calls) == 2  # 先按标签查（无果），再按文件名兜底
+    assert calls[0] == 'recording:"1965" AND artist:"Zelly Day"'
+    assert calls[1] == 'recording:"1965" AND artist:"Zella Day"'
+
+
+async def test_musicbrainz_search_survives_one_failed_query() -> None:
+    """单条查询失败（如 MB 限流 503）不应丢弃其他查询的结果。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        query = request.url.params.get("query", "")
+        if 'recording:"1965"' in query:
+            return httpx.Response(200, json={"recordings": [_mb_rec("r1", "1965", "Zella Day")]})
+        return httpx.Response(503, text="rate limited")
+
+    provider = MusicBrainzProvider()
+    provider.max_retries = 1  # 测试中不等待退避
+    provider.bind(_client(handler))
+    results = await provider.search(ScrapeQuery(filename_hint="1965 - Zella Day"))
+
+    assert [item.external_id for item in results] == ["r1"]
 
 
 def test_split_filename_hint() -> None:
