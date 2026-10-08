@@ -66,14 +66,38 @@ cd backend && pytest
 cd frontend && npm run test
 ```
 
-## Docker
+## Docker 部署
+
+### Unraid（推荐，一键脚本）
+
+仓库内置了可复用的部署脚本，会自动同步源码、注册为 Unraid **Compose Manager 栈**（可在
+`Unraid → Docker → Compose` 中启动/停止/更新/编辑/看日志）并构建启动：
+
+```bash
+# 默认部署到 root@192.168.31.252，可用环境变量覆盖
+deploy/unraid/deploy.sh
+
+# 例：换 NAS / 换端口 / 换曲库
+NAS_HOST=root@10.0.0.5 PORT=8080 MUSIC_PATH=/mnt/user/media/music \
+  deploy/unraid/deploy.sh
+```
+
+默认目录布局（NAS 上）：
+
+| 路径 | 说明 |
+| --- | --- |
+| `/mnt/user/appdata/musictag-lite/src` | 源码（构建上下文） |
+| `/mnt/user/appdata/musictag-lite/data` | SQLite / 配置（持久化） |
+| `/boot/config/plugins/compose.manager/projects/musictag-lite` | Compose 栈定义与 `.env` |
+
+### 通用主机（docker compose）
 
 ```bash
 cd docker
-APP_SECRET_KEY=$(openssl rand -hex 32) MUSIC_ROOT=/path/to/music docker compose up --build
+APP_SECRET_KEY=$(openssl rand -hex 32) MUSIC_PATH=/path/to/music docker compose up --build
 ```
 
-访问 <http://localhost:8000>。数据（SQLite / 缓存）落在挂载的 `./data`，曲库挂载为 `/music`。
+访问 <http://localhost:8000>。曲库挂载为 `/music`，数据落在 `./data`。
 
 ## 阶段说明
 

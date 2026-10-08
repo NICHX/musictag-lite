@@ -1,0 +1,34 @@
+# MusicTag Lite — Unraid（Compose Manager）栈定义
+#
+# 该文件由 deploy/unraid/deploy.sh 复制到
+#   /boot/config/plugins/compose.manager/projects/musictag-lite/docker-compose.yml
+# 变量来自同目录下的 .env（由脚本生成）：
+#   APP_DIR  = 源码与数据根目录（如 /mnt/user/appdata/musictag-lite）
+#   MUSIC_PATH = 曲库在 NAS 上的绝对路径
+#   PORT     = 对外端口
+#   APP_SECRET_KEY = 应用密钥
+#
+# 注意：net.unraid.docker.managed 让 Unraid 识别为受管容器；
+# 由 Compose Manager 启动时插件也会注入该标签（已声明则自动跳过）。
+
+services:
+  musictag-lite:
+    build:
+      context: ${APP_DIR}/src
+      dockerfile: backend/Dockerfile
+    image: musictag-lite:latest
+    container_name: musictag-lite
+    labels:
+      net.unraid.docker.managed: 'true'
+    ports:
+      - '${PORT:-8000}:8000'
+    environment:
+      - APP_SECRET_KEY=${APP_SECRET_KEY:?请在 .env 中设置 APP_SECRET_KEY}
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - MUSIC_ROOT=/music
+      - DATA_DIR=/data
+    volumes:
+      - '${MUSIC_PATH:?请在 .env 中设置 MUSIC_PATH}:/music:rw'
+      - '${APP_DIR}/data:/data'
+    restart: unless-stopped
