@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import CoverBatchDialog from '@/components/CoverBatchDialog.vue'
 import { trackApi } from '@/api/endpoints'
 import type { BatchEditOp } from '@/api/types'
 
@@ -9,6 +10,7 @@ const props = defineProps<{ ids: number[] }>()
 const emit = defineEmits<{ clear: []; done: [] }>()
 
 const router = useRouter()
+const showCover = ref(false)
 
 const FIELDS = [
   { key: 'title', label: '标题' },
@@ -190,7 +192,14 @@ async function apply(): Promise<void> {
 
       <button
         type="button"
-        class="ml-auto rounded-control border border-brand/50 px-2.5 py-1 text-xs text-brand transition-colors hover:bg-brand/10"
+        class="ml-auto rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:text-text"
+        @click="showCover = true"
+      >
+        封面
+      </button>
+      <button
+        type="button"
+        class="rounded-control border border-brand/50 px-2.5 py-1 text-xs text-brand transition-colors hover:bg-brand/10"
         @click="router.push('/organize')"
       >
         整理
@@ -203,5 +212,7 @@ async function apply(): Promise<void> {
         取消选择
       </button>
     </div>
+
+    <CoverBatchDialog v-if="showCover" :ids="ids" @close="showCover = false" @done="emit('done')" />
   </div>
 </template>

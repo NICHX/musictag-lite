@@ -493,6 +493,34 @@ class CoverBatchExportResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# 封面批量替换（F20）：预演匹配 + 按指派写入内嵌封面
+# --------------------------------------------------------------------------- #
+class CoverBatchPreviewRequest(BaseModel):
+    ids: list[int] = Field(min_length=1, description="匹配作用域：仅在这些曲目内匹配")
+    filenames: list[str] = Field(min_length=1, description="待匹配的图片文件名（不含路径）")
+
+
+class CoverBatchMatch(BaseModel):
+    index: int
+    filename: str
+    status: Literal["ok", "ambiguous", "unmatched"] = "unmatched"
+    match: Literal["stem", "album", "album_name"] | None = None
+    track_ids: list[int] = Field(default_factory=list)
+    album: str | None = None
+
+
+class CoverAlbumGroup(BaseModel):
+    label: str
+    track_ids: list[int]
+
+
+class CoverBatchPreviewResponse(BaseModel):
+    matches: list[CoverBatchMatch] = Field(default_factory=list)
+    albums: list[CoverAlbumGroup] = Field(default_factory=list)
+    all_track_ids: list[int] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
 # 批量刮削作业
 # --------------------------------------------------------------------------- #
 class ScrapeJobCreateRequest(BaseModel):

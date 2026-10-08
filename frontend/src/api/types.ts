@@ -188,6 +188,32 @@ export interface CoverMeta {
   mime: string | null
 }
 
+/** 封面批量替换（F20） */
+export interface CoverBatchMatch {
+  index: number
+  filename: string
+  status: 'ok' | 'ambiguous' | 'unmatched'
+  match: 'stem' | 'album' | 'album_name' | null
+  track_ids: number[]
+  album: string | null
+}
+
+export interface CoverAlbumGroup {
+  label: string
+  track_ids: number[]
+}
+
+export interface CoverBatchPreviewResponse {
+  matches: CoverBatchMatch[]
+  albums: CoverAlbumGroup[]
+  all_track_ids: number[]
+}
+
+export interface CoverAssignment {
+  index: number
+  track_ids: number[]
+}
+
 export interface LyricsRead {
   track_id: number
   available: boolean

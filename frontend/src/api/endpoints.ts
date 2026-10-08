@@ -8,6 +8,8 @@ import type {
   BatchPreviewResponse,
   Candidate,
   Capabilities,
+  CoverAssignment,
+  CoverBatchPreviewResponse,
   CoverMeta,
   Library,
   LyricsRead,
@@ -79,6 +81,26 @@ export const coverApi = {
     return (await response.json()) as CoverMeta
   },
   remove: (trackId: number) => api.delete<{ removed: boolean }>(`/tracks/${trackId}/cover`),
+  /** F20：仅凭文件名在所选曲目内匹配（dry-run，不写盘） */
+  batchPreview: (body: { ids: number[]; filenames: string[] }) =>
+    api.post<CoverBatchPreviewResponse>('/covers/batch-preview', body),
+  /** F20：按确认的指派批量写入内嵌封面（multipart） */
+  batchReplace: async (files: File[], assignments: CoverAssignment[]): Promise<TaskAccepted> => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file)
+    form.append('assignments', JSON.stringify(assignments))
+    const response = await fetch('/api/covers/batch-replace', { method: 'POST', body: form })
+    if (!response.ok) {
+      let detail = response.statusText
+      try {
+        detail = ((await response.json()) as { detail?: string }).detail ?? detail
+      } catch {
+        /* 忽略非 JSON */
+      }
+      throw new Error(detail)
+    }
+    return (await response.json()) as TaskAccepted
+  },
 }
 
 export const lyricsApi = {

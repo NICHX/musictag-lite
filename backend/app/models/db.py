@@ -44,6 +44,7 @@ class TaskType(StrEnum):
     organize = "organize"
     convert = "convert"
     cover_export = "cover_export"
+    cover_write = "cover_write"
     lyrics_write = "lyrics_write"
 
 
