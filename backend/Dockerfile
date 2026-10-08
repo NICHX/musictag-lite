@@ -27,6 +27,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# 可选外部工具：Chromaprint 的 fpcalc（F14 指纹识别用；核心功能不依赖它）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libchromaprint-tools \
+    && rm -rf /var/lib/apt/lists/*
+
 # 安装后端（先拷依赖描述以利用构建缓存）
 COPY backend/pyproject.toml ./backend/pyproject.toml
 COPY backend/app ./backend/app

@@ -2,8 +2,16 @@
 import { onMounted, ref } from 'vue'
 
 import { api } from '@/api/client'
-import { aiApi } from '@/api/endpoints'
-import type { AISettings, AISettingsUpdate, Health, Library, Provider } from '@/api/types'
+import { acoustidApi, aiApi } from '@/api/endpoints'
+import type {
+  AISettings,
+  AISettingsUpdate,
+  AcoustIDSettings,
+  AcoustIDSettingsUpdate,
+  Health,
+  Library,
+  Provider,
+} from '@/api/types'
 
 const libraries = ref<Library[]>([])
 const providers = ref<Provider[]>([])
@@ -19,6 +27,11 @@ const aiForm = ref({ enabled: false, base_url: '', model: '', api_key: '' })
 const aiSaving = ref(false)
 const aiMessage = ref<string | null>(null)
 
+const acoustid = ref<AcoustIDSettings | null>(null)
+const acoustidKey = ref('')
+const acoustidSaving = ref(false)
+const acoustidMessage = ref<string | null>(null)
+
 function syncAiForm(data: AISettings): void {
   ai.value = data
   aiForm.value = { enabled: data.enabled, base_url: data.base_url, model: data.model, api_key: '' }
@@ -27,16 +40,18 @@ function syncAiForm(data: AISettings): void {
 async function load(): Promise<void> {
   error.value = null
   try {
-    const [libs, provs, status, aiSettings] = await Promise.all([
+    const [libs, provs, status, aiSettings, acoustidSettings] = await Promise.all([
       api.get<Library[]>('/libraries'),
       api.get<Provider[]>('/providers'),
       api.get<Health>('/health'),
       aiApi.get(),
+      acoustidApi.get(),
     ])
     libraries.value = libs
     providers.value = provs
     health.value = status
     syncAiForm(aiSettings)
+    acoustid.value = acoustidSettings
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载失败'
   }
@@ -63,6 +78,26 @@ async function saveAi(extra: AISettingsUpdate = {}): Promise<void> {
     error.value = e instanceof Error ? e.message : '保存失败'
   } finally {
     aiSaving.value = false
+  }
+}
+
+async function saveAcoustid(extra: AcoustIDSettingsUpdate = {}): Promise<void> {
+  acoustidSaving.value = true
+  error.value = null
+  acoustidMessage.value = null
+  try {
+    const body: AcoustIDSettingsUpdate = { ...extra }
+    // 留空表示不改动密钥；如需清除请用「清除密钥」
+    if (!('api_key' in extra) && acoustidKey.value.trim()) {
+      body.api_key = acoustidKey.value.trim()
+    }
+    acoustid.value = await acoustidApi.update(body)
+    acoustidKey.value = ''
+    acoustidMessage.value = '已保存'
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '保存失败'
+  } finally {
+    acoustidSaving.value = false
   }
 }
 
@@ -278,6 +313,63 @@ onMounted(load)
             {{ ai?.available ? '已启用 · 检查器将出现「AI 解析」' : '未启用' }}
           </span>
         </div>
+      </section>
+
+      <section class="rounded-card border border-border bg-surface p-4">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="text-base font-medium">指纹识别（AcoustID）</h2>
+            <p class="mt-1 text-xs text-muted">
+              可选：对无标签、文件名混乱的曲目用音频指纹识别。指纹在本地（fpcalc）计算，
+              仅发送指纹与时长到 AcoustID，不上传音频本体；需先申请免费的 AcoustID API Key。
+            </p>
+          </div>
+          <span
+            class="mt-1 shrink-0 text-xs"
+            :class="acoustid?.available ? 'text-success' : 'text-muted'"
+          >
+            {{ acoustid?.available ? '已配置' : '未配置' }}
+          </span>
+        </div>
+
+        <label class="mt-4 flex flex-col gap-1 text-xs text-muted">
+          API Key
+          <input
+            v-model="acoustidKey"
+            type="password"
+            autocomplete="off"
+            :placeholder="
+              acoustid?.has_api_key
+                ? `已配置（${acoustid.api_key_masked}），留空表示不修改`
+                : 'AcoustID API Key'
+            "
+            class="rounded-control border border-border bg-bg px-2.5 py-1.5 font-mono text-sm text-text outline-none placeholder:text-muted focus:border-brand"
+          />
+        </label>
+
+        <div class="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            class="rounded-control bg-brand px-3.5 py-1.5 text-sm font-medium text-bg transition-colors hover:bg-brand-600 disabled:opacity-50"
+            :disabled="acoustidSaving"
+            @click="saveAcoustid()"
+          >
+            {{ acoustidSaving ? '保存中…' : '保存设置' }}
+          </button>
+          <button
+            v-if="acoustid?.has_api_key"
+            type="button"
+            class="rounded-control border border-border px-3 py-1.5 text-sm text-muted transition-colors hover:border-danger/60 hover:text-danger disabled:opacity-50"
+            :disabled="acoustidSaving"
+            @click="saveAcoustid({ api_key: '' })"
+          >
+            清除密钥
+          </button>
+          <span v-if="acoustidMessage" class="text-xs text-success">{{ acoustidMessage }}</span>
+        </div>
+        <p class="mt-2 text-xs text-muted">
+          在「刮削源」中启用 AcoustID 后，刮削搜索无命中时会自动用指纹兜底；也可在刮削页手动点「指纹识别」。
+        </p>
       </section>
 
       <section class="rounded-card border border-border bg-surface p-4">

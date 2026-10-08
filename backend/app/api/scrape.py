@@ -1,9 +1,10 @@
-"""在线刮削（F7）：搜索候选、应用候选、批量作业。"""
+"""在线刮削（F7）：搜索候选、应用候选、批量作业；指纹识别（F14）。"""
 
 from __future__ import annotations
 
 import json
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
 
@@ -15,6 +16,7 @@ from app.models.db import ScrapeJob, TaskStatus, Track
 from app.models.schemas import (
     CandidateRead,
     FieldDiff,
+    FingerprintRequest,
     ScrapeApplyRequest,
     ScrapeApplyResponse,
     ScrapeJobCreateRequest,
@@ -24,6 +26,8 @@ from app.models.schemas import (
     TaskAccepted,
 )
 from app.providers.base import Candidate, ScrapeQuery
+from app.services import acoustid_config
+from app.services.fingerprint import FingerprintUnavailable, fpcalc_available
 from app.services.scrape_orchestrator import scrape_orchestrator
 
 router = APIRouter(prefix="/scrape", tags=["scrape"])
@@ -33,11 +37,39 @@ logger = get_logger(__name__)
 AUTO_APPLY_THRESHOLD = 0.6
 
 
+def _candidate_read(item: Candidate) -> CandidateRead:
+    return CandidateRead(
+        provider=item.provider,
+        external_id=item.external_id,
+        title=item.title,
+        artist=item.artist,
+        album=item.album,
+        year=item.year,
+        track_no=item.track_no,
+        score=item.score,
+        cover_url=item.cover_url,
+        payload=item.payload,
+    )
+
+
+async def _fingerprint_fallback(session: Session, track: Track) -> list[Candidate]:
+    """F16 兜底：标签/文件名都无命中时用指纹识别（需 fpcalc + Key + 已启用该源）。"""
+    if not fpcalc_available() or not acoustid_config.resolve(session).available:
+        return []
+    if not scrape_orchestrator.select_providers(session, "fingerprint"):
+        return []
+    try:
+        return await scrape_orchestrator.identify(session, track)
+    except FingerprintUnavailable:
+        return []
+
+
 @router.post("/search", response_model=ScrapeSearchResponse)
 async def search(
     payload: ScrapeSearchRequest, session: Session = Depends(get_session)
 ) -> ScrapeSearchResponse:
     """按 track_id 或直接查询词搜索候选（多源并发 + 打分排序）。"""
+    track: Track | None = None
     if payload.track_id is not None:
         track = get_track_or_404(session, payload.track_id)
         ensure_track_path(session, track)
@@ -50,23 +82,46 @@ async def search(
     candidates = await scrape_orchestrator.search(
         session, query, providers=payload.providers, limit=payload.limit
     )
+    # F16 多源兜底：标签/文件名都无命中时，尝试指纹识别（需已启用该源并配置好 Key）
+    if not candidates and track is not None:
+        candidates = await _fingerprint_fallback(session, track)
+
     return ScrapeSearchResponse(
         track_id=payload.track_id,
-        candidates=[
-            CandidateRead(
-                provider=item.provider,
-                external_id=item.external_id,
-                title=item.title,
-                artist=item.artist,
-                album=item.album,
-                year=item.year,
-                track_no=item.track_no,
-                score=item.score,
-                cover_url=item.cover_url,
-                payload=item.payload,
-            )
-            for item in candidates
-        ],
+        candidates=[_candidate_read(item) for item in candidates],
+    )
+
+
+@router.post("/fingerprint", response_model=ScrapeSearchResponse)
+async def fingerprint(
+    payload: FingerprintRequest, session: Session = Depends(get_session)
+) -> ScrapeSearchResponse:
+    """指纹识别（F14，手动触发）：fpcalc → AcoustID → 回填 MusicBrainz。
+
+    仅发送指纹与时长，不上传音频本体。需镜像内可用 fpcalc 且已配置 API Key。
+    """
+    track = get_track_or_404(session, payload.track_id)
+    ensure_track_path(session, track)
+
+    if not fpcalc_available():
+        raise HTTPException(
+            status_code=400, detail="未安装 fpcalc（Chromaprint），无法进行指纹识别"
+        )
+    if not acoustid_config.resolve(session).available:
+        raise HTTPException(
+            status_code=400,
+            detail="未配置 AcoustID API Key（可在设置页填写或设置 ACOUSTID_API_KEY）",
+        )
+    try:
+        candidates = await scrape_orchestrator.identify(session, track)
+    except FingerprintUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=f"指纹识别失败：{exc}") from exc
+
+    return ScrapeSearchResponse(
+        track_id=track.id,
+        candidates=[_candidate_read(item) for item in candidates],
     )
 
 

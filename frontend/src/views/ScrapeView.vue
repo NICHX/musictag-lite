@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import EmptyState from '@/components/EmptyState.vue'
-import { coverApi, providerApi, scrapeApi } from '@/api/endpoints'
+import { coverApi, providerApi, scrapeApi, systemApi } from '@/api/endpoints'
 import type { Candidate, ScrapeApplyResponse, Track } from '@/api/types'
 import { formatDuration } from '@/lib/format'
 import { PLAN_FIELDS, changedFields, planChanges } from '@/lib/scrapePlan'
@@ -22,6 +22,8 @@ const candidates = ref<Candidate[]>([])
 const chosenUid = ref<string | null>(null)
 const providerNames = ref<Record<string, string>>({})
 const searching = ref(false)
+const fingerprinting = ref(false)
+const fingerprintReady = ref(false)
 const applying = ref(false)
 const error = ref<string | null>(null)
 
@@ -120,6 +122,30 @@ async function search(): Promise<void> {
   }
 }
 
+async function fingerprint(): Promise<void> {
+  if (!selectedTrackId.value) {
+    error.value = '请先选择一首曲目'
+    return
+  }
+  fingerprinting.value = true
+  error.value = null
+  candidates.value = []
+  chosenUid.value = null
+  applied.value = null
+  appliedTrack.value = null
+  showAllCandidates.value = false
+  try {
+    const response = await scrapeApi.fingerprint(selectedTrackId.value)
+    candidates.value = response.candidates
+    if (candidates.value.length) chosenUid.value = scrapeApi.list(candidates.value[0])
+    else error.value = '指纹未识别出匹配结果'
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '指纹识别失败'
+  } finally {
+    fingerprinting.value = false
+  }
+}
+
 async function apply(): Promise<void> {
   const trackId = selectedTrackId.value
   if (!trackId || !chosenUid.value) return
@@ -173,8 +199,13 @@ function resetResult(): void {
 }
 
 onMounted(async () => {
-  const [providers] = await Promise.all([providerApi.list().catch(() => []), store.loadLibraries()])
+  const [providers, caps] = await Promise.all([
+    providerApi.list().catch(() => []),
+    systemApi.capabilities().catch(() => null),
+    store.loadLibraries(),
+  ])
   providerNames.value = Object.fromEntries(providers.map((item) => [item.key, item.name]))
+  fingerprintReady.value = caps?.acoustid ?? false
   await loadTracks()
   const fromQuery = Number(route.query.track)
   if (fromQuery && store.tracks.some((track) => track.id === fromQuery)) {
@@ -223,6 +254,15 @@ onMounted(async () => {
           @click="search"
         >
           {{ searching ? '搜索中…' : '搜索候选' }}
+        </button>
+        <button
+          type="button"
+          class="rounded-control border border-border px-3.5 py-1.5 text-sm text-muted transition-colors hover:text-text disabled:opacity-50"
+          :disabled="fingerprinting || searching || !selectedTrackId || !fingerprintReady"
+          :title="fingerprintReady ? '用音频指纹识别（AcoustID）' : '需在设置里配置 AcoustID API Key'"
+          @click="fingerprint"
+        >
+          {{ fingerprinting ? '识别中…' : '指纹识别' }}
         </button>
       </div>
     </header>

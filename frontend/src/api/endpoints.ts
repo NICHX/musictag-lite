@@ -4,6 +4,8 @@ import { api } from './client'
 import type {
   AISettings,
   AISettingsUpdate,
+  AcoustIDSettings,
+  AcoustIDSettingsUpdate,
   BatchEditRequest,
   BatchPreviewResponse,
   Candidate,
@@ -127,6 +129,9 @@ export const scrapeApi = {
     apply_lyrics?: boolean
   }) => api.post<ScrapeApplyResponse>('/scrape/apply', body),
   list: (candidate: Candidate) => `${candidate.provider}:${candidate.external_id}`,
+  /** F14：指纹识别（fpcalc → AcoustID → 回填 MusicBrainz），需已配置 Key */
+  fingerprint: (trackId: number) =>
+    api.post<ScrapeSearchResponse>('/scrape/fingerprint', { track_id: trackId }),
 }
 
 export const logsApi = {
@@ -178,4 +183,11 @@ export const systemApi = {
 export const aiApi = {
   get: () => api.get<AISettings>('/settings/ai'),
   update: (body: AISettingsUpdate) => api.patch<AISettings>('/settings/ai', body),
+}
+
+/** AcoustID 指纹识别配置（密钥脱敏；更新时省略 api_key 表示不修改） */
+export const acoustidApi = {
+  get: () => api.get<AcoustIDSettings>('/settings/acoustid'),
+  update: (body: AcoustIDSettingsUpdate) =>
+    api.patch<AcoustIDSettings>('/settings/acoustid', body),
 }

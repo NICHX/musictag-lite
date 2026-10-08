@@ -18,8 +18,10 @@ from app.core.logging import get_logger
 from app.models.db import ProviderConfig, Track
 from app.providers.base import AlbumBundle, Candidate, CoverBytes, ScrapeQuery
 from app.providers.registry import ProviderRegistry, provider_registry
+from app.services import acoustid_config
 from app.services.cover_service import CoverService
 from app.services.filename_parser import parse_filename
+from app.services.fingerprint import compute_fingerprint
 from app.services.lyrics_service import LyricsService
 from app.services.tag_service import SOURCE_SCRAPE, TagService
 
@@ -101,6 +103,13 @@ class ScrapeOrchestrator:
             if callable(bind):
                 bind(self._client)
 
+    def _configure_acoustid(self, session: Session | None) -> None:
+        """把生效的 AcoustID Key（界面设置 > 环境变量）注入 Provider。"""
+        provider = self.registry.get("acoustid")
+        configure = getattr(provider, "configure", None)
+        if callable(configure):
+            configure(acoustid_config.resolve(session).api_key)
+
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()
@@ -169,6 +178,7 @@ class ScrapeOrchestrator:
         if not chosen:
             return []
         self.client()
+        self._configure_acoustid(session)
         results = await asyncio.gather(
             *(provider.search(query) for provider in chosen), return_exceptions=True
         )
@@ -187,6 +197,54 @@ class ScrapeOrchestrator:
             candidate.score = score_candidate(candidate, query)
         candidates.sort(key=lambda item: item.score, reverse=True)
         return candidates[:limit]
+
+    async def identify(
+        self, session: Session, track: Track, *, enrich: bool = True, limit: int = 5
+    ) -> list[Candidate]:
+        """指纹识别（F14）：本地 fpcalc → AcoustID → 回填 MusicBrainz。
+
+        仅发送指纹与时长（不上传音频）；供「标签与文件名都不可靠」时兜底使用。
+        """
+        provider = self.registry.get("acoustid")
+        if provider is None:
+            return []
+        self.client()
+        self._configure_acoustid(session)
+        fingerprint = await asyncio.to_thread(compute_fingerprint, track.path)
+        candidates = await provider.identify(fingerprint.value, fingerprint.duration)
+        candidates = candidates[:limit]
+        if enrich and candidates:
+            await self._enrich_with_musicbrainz(candidates)
+        candidates.sort(key=lambda item: item.score, reverse=True)
+        return candidates
+
+    async def _enrich_with_musicbrainz(self, candidates: list[Candidate]) -> None:
+        """用 MusicBrainz recording id 补齐专辑/年份/封面。"""
+        musicbrainz = self.registry.get("musicbrainz")
+        if musicbrainz is None:
+            return
+        for candidate in candidates:
+            try:
+                bundle = await musicbrainz.fetch(candidate.external_id)
+            except Exception as exc:  # noqa: BLE001 - 单条回填失败不影响识别
+                logger.warning(
+                    "fingerprint.enrich_failed",
+                    extra={"id": candidate.external_id, "error": str(exc)},
+                )
+                continue
+            if bundle.title and not candidate.title:
+                candidate.title = bundle.title
+            if bundle.artist and not candidate.artist:
+                candidate.artist = bundle.artist
+            if bundle.album and not candidate.album:
+                candidate.album = bundle.album
+            if bundle.year and not candidate.year:
+                candidate.year = bundle.year
+            if bundle.cover_url:
+                candidate.cover_url = bundle.cover_url
+            release_id = bundle.extra.get("release_id")
+            if release_id:
+                candidate.payload["release_id"] = release_id
 
     async def apply(
         self,

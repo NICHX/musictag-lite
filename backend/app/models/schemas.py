@@ -403,6 +403,7 @@ class Capabilities(BaseModel):
     ffmpeg: bool = False
     fpcalc: bool = False
     ai: bool = False
+    acoustid: bool = False
 
 
 class AISettingsRead(BaseModel):
@@ -424,6 +425,25 @@ class AISettingsUpdate(BaseModel):
         default=None,
         description="省略=不修改；空字符串=清除；否则设置为新密钥",
     )
+
+
+class AcoustIDSettingsRead(BaseModel):
+    """AcoustID 指纹识别配置（密钥始终脱敏，不回传明文）。"""
+
+    has_api_key: bool = False
+    api_key_masked: str | None = None
+    available: bool = False
+
+
+class AcoustIDSettingsUpdate(BaseModel):
+    api_key: str | None = Field(
+        default=None,
+        description="省略=不修改；空字符串=清除；否则设置为新密钥",
+    )
+
+
+class FingerprintRequest(BaseModel):
+    track_id: int
 
 
 # --------------------------------------------------------------------------- #

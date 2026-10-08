@@ -15,11 +15,6 @@ def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
-def fpcalc_available() -> bool:
-    """检测 Chromaprint 的 fpcalc（P1 指纹识别可选依赖）。"""
-    return shutil.which("fpcalc") is not None
-
-
 class ConvertService:
     """转码任务（M2 实现）。"""
 

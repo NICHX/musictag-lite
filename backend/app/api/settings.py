@@ -12,12 +12,14 @@ from sqlmodel import Session, select
 from app.core.db import get_session
 from app.models.db import Setting
 from app.models.schemas import (
+    AcoustIDSettingsRead,
+    AcoustIDSettingsUpdate,
     AISettingsRead,
     AISettingsUpdate,
     SettingsRead,
     SettingsUpdate,
 )
-from app.services import ai_config
+from app.services import acoustid_config, ai_config
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -96,3 +98,28 @@ def update_ai_settings(
         **({"api_key": payload.api_key} if key_provided else {}),
     )
     return _ai_read(session)
+
+
+def _acoustid_read(session: Session) -> AcoustIDSettingsRead:
+    config = acoustid_config.resolve(session)
+    return AcoustIDSettingsRead(
+        has_api_key=bool(config.api_key),
+        api_key_masked=acoustid_config.mask_key(config.api_key),
+        available=config.available,
+    )
+
+
+@router.get("/acoustid", response_model=AcoustIDSettingsRead)
+def get_acoustid_settings(session: Session = Depends(get_session)) -> AcoustIDSettingsRead:
+    """读取 AcoustID 配置（密钥脱敏）。"""
+    return _acoustid_read(session)
+
+
+@router.patch("/acoustid", response_model=AcoustIDSettingsRead)
+def update_acoustid_settings(
+    payload: AcoustIDSettingsUpdate, session: Session = Depends(get_session)
+) -> AcoustIDSettingsRead:
+    """更新 AcoustID API Key；省略 ``api_key`` 表示不修改，传空串表示清除。"""
+    if "api_key" in payload.model_fields_set:
+        acoustid_config.update(session, api_key=payload.api_key)
+    return _acoustid_read(session)

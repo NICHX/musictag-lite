@@ -9,8 +9,10 @@ from app import __version__
 from app.core.config import get_settings
 from app.core.db import get_session
 from app.models.schemas import Capabilities, HealthResponse
+from app.services import acoustid_config
 from app.services.ai_config import is_ai_available
-from app.services.convert_service import ffmpeg_available, fpcalc_available
+from app.services.convert_service import ffmpeg_available
+from app.services.fingerprint import fpcalc_available
 
 router = APIRouter(tags=["meta"])
 
@@ -39,4 +41,5 @@ def capabilities(session: Session = Depends(get_session)) -> Capabilities:
         ffmpeg=ffmpeg_available(),
         fpcalc=fpcalc_available(),
         ai=is_ai_available(session),
+        acoustid=fpcalc_available() and acoustid_config.is_available(session),
     )

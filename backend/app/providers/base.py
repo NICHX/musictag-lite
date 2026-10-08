@@ -195,3 +195,24 @@ class HTTPProvider:
         response.raise_for_status()
         mime = response.headers.get("content-type", "image/jpeg").split(";")[0].strip()
         return CoverBytes(data=response.content, mime=mime or "image/jpeg")
+
+    async def _post(self, url: str, data: dict[str, Any] | None = None) -> httpx.Response:
+        """带限速与退避重试的 POST（表单编码；用于指纹等长参数）。"""
+        response: httpx.Response | None = None
+        for attempt in range(self.max_retries):
+            await self._throttle()
+            response = await self.client.post(url, data=data)
+            if response.status_code not in self.retry_statuses:
+                return response
+            if attempt < self.max_retries - 1:
+                await asyncio.sleep(self._retry_delay(attempt, response))
+        assert response is not None
+        return response
+
+    async def _post_json(self, url: str, data: dict[str, Any] | None = None) -> Any | None:
+        """POST 表单并解析 JSON；404 返回 None。"""
+        response = await self._post(url, data=data)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()

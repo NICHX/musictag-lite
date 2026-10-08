@@ -296,6 +296,7 @@ export interface Capabilities {
   ffmpeg: boolean
   fpcalc: boolean
   ai: boolean
+  acoustid: boolean
 }
 
 /** AI 辅助配置（密钥始终脱敏） */
@@ -312,6 +313,17 @@ export interface AISettingsUpdate {
   enabled?: boolean
   base_url?: string
   model?: string
+  api_key?: string
+}
+
+/** AcoustID 指纹识别配置（密钥始终脱敏） */
+export interface AcoustIDSettings {
+  has_api_key: boolean
+  api_key_masked: string | null
+  available: boolean
+}
+
+export interface AcoustIDSettingsUpdate {
   api_key?: string
 }
 
