@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
@@ -12,7 +13,19 @@ from app.api.deps import ensure_track_path, get_track_or_404, not_implemented
 from app.audio.mutagen_io import UnsupportedFormatError
 from app.core.db import get_session
 from app.models.db import Track
-from app.models.schemas import Page, TrackFacets, TrackRead, TrackUpdate
+from app.models.schemas import (
+    FieldDiff,
+    Page,
+    ParsedFields,
+    ParseFilenameRequest,
+    ParseFilenameResponse,
+    TrackFacets,
+    TrackRead,
+    TrackUpdate,
+)
+from app.services.ai_parser import AIUnavailableError, parse_filename_with_ai
+from app.services.filename_parser import parse_filename
+from app.services.scrape_orchestrator import scrape_orchestrator
 from app.services.tag_service import SOURCE_MANUAL, TagService
 
 router = APIRouter(prefix="/tracks", tags=["tracks"])
@@ -139,3 +152,63 @@ def update_track(
 @router.get("/{track_id}/stream")
 def stream_track(track_id: int):
     raise not_implemented("M2", "音频流式试听将在 M2（P1）实现")
+
+
+@router.post("/{track_id}/parse-filename", response_model=ParseFilenameResponse)
+async def parse_track_filename(
+    track_id: int,
+    payload: ParseFilenameRequest,
+    session: Session = Depends(get_session),
+) -> ParseFilenameResponse:
+    """按文件名解析标签；可选 AI 辅助；``apply=false`` 时仅预览不写盘。"""
+    track = get_track_or_404(session, track_id)
+    ensure_track_path(session, track)
+
+    known = scrape_orchestrator.known_artists(session)
+    parsed = parse_filename(track.filename, known)
+    source: str = "heuristic"
+    note = parsed.note
+
+    if payload.use_ai:
+        try:
+            parsed = await parse_filename_with_ai(track.filename)
+            source, note = "ai", parsed.note
+        except AIUnavailableError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (httpx.HTTPError, OSError, ValueError) as exc:
+            # AI 不可用时回退到本地启发式，并在 note 中说明原因
+            parsed = parse_filename(track.filename, known)
+            note = f"AI 解析失败，已回退到本地解析：{exc}"
+
+    fields = ParsedFields(
+        title=parsed.title,
+        artist=parsed.artist,
+        album=parsed.album,
+        track_no=parsed.track_no,
+    )
+    diffs = [
+        FieldDiff(field=name, old_value=getattr(track, name), new_value=new_value)
+        for name in ("title", "artist", "album", "track_no")
+        if (new_value := getattr(fields, name)) is not None and getattr(track, name) != new_value
+    ]
+
+    applied = False
+    if payload.apply and diffs:
+        values = {diff.field: diff.new_value for diff in diffs}
+        try:
+            TagService().apply_single(session, track, values, source=SOURCE_MANUAL)
+        except UnsupportedFormatError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"写入失败：{exc}") from exc
+        applied = True
+
+    return ParseFilenameResponse(
+        track_id=track_id,
+        source="ai" if source == "ai" else "heuristic",
+        confidence=parsed.confidence,
+        note=note,
+        fields=fields,
+        diffs=diffs,
+        applied=applied,
+    )

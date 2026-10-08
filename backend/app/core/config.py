@@ -97,6 +97,13 @@ class Settings(BaseSettings):
     musicbrainz_rate_limit: float = 1.0  # 每秒请求数上限
     acoustid_api_key: str | None = None  # 可选，P1 指纹识别
 
+    # ---- 可选 AI 辅助（OpenAI 兼容端点；默认关闭，仅手动触发，不会自动上传）----
+    ai_enabled: bool = False
+    ai_base_url: str = "https://api.openai.com/v1"
+    ai_api_key: str | None = None
+    ai_model: str = "gpt-4o-mini"
+    ai_timeout: float = 30.0
+
     # ---- 鉴权（P2，默认关闭）----
     auth_enabled: bool = False
 

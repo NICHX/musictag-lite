@@ -66,6 +66,41 @@ cd backend && pytest
 cd frontend && npm run test
 ```
 
+## 文件名识别与可选 AI 辅助
+
+文件名解析采用**分层收敛**（全部离线，默认可用）：
+
+1. 清洗：剥离 `[FLAC]`、`(Official Video)` 等音质/来源标记；
+2. 分段：按 ` - ` / `–` / `—` 切分，并提取 `01 -` 音轨号前缀；
+3. **消歧**：用曲库中已出现过的艺术家判断哪个片段是艺术家，从而兼容
+   「标题 - 艺术家」与「艺术家 - 标题」两种命名惯例；
+4. 查询：MusicBrainz 字段限定查询，命中即止、落空则反向再试；
+5. 兜底：标签查询无结果时回退用文件名再查（标签拼错也能救回）；
+6. 排序：分词覆盖率打分，与分隔符/顺序无关。
+
+资源库检查器里的「按文件名解析」可**预览**解析结果（字段 old → new），确认后再写入文件。
+
+### 可选 AI 辅助（默认关闭，仅手动触发）
+
+需要模型更强地处理「长括号描述 + 多艺术家 + 冷门曲目」这类规则难拆的文件名时，
+可接入任意 **OpenAI 兼容**接口（OpenAI / DeepSeek / 硅基流动 / LM Studio / Ollama…）：
+
+```bash
+# backend/.env（本地开发）
+AI_ENABLED=true
+AI_BASE_URL=https://api.deepseek.com/v1
+AI_MODEL=deepseek-chat
+AI_API_KEY=sk-xxx
+```
+
+隐私与安全约束：**默认关闭**；**只发送文件名字符串**（不含路径、不上传音频）；
+**仅在你点击「AI 解析」时调用**，不会在扫描/刮削流程中自动触发；密钥不写日志。
+启用后检查器会出现「AI 解析」按钮，解析失败会自动回退到本地规则。
+
+Unraid 上把上述变量写进栈的 `.env`
+（`/boot/config/plugins/compose.manager/projects/musictag-lite/.env`）后重启栈即可；
+`deploy/unraid/deploy.sh` 会**保留**这些手填的键，重新部署不会覆盖它们。
+
 ## Docker 部署
 
 ### Unraid（推荐，一键脚本）

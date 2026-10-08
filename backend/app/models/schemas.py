@@ -367,6 +367,31 @@ class ConvertRequest(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# 文件名解析（F11 的文件名 → 标签方向）
+# --------------------------------------------------------------------------- #
+class ParseFilenameRequest(BaseModel):
+    use_ai: bool = Field(default=False, description="是否调用 AI 辅助（需在设置中配置）")
+    apply: bool = Field(default=False, description="是否直接写入标签；false 时仅预览")
+
+
+class ParsedFields(BaseModel):
+    title: str | None = None
+    artist: str | None = None
+    album: str | None = None
+    track_no: int | None = None
+
+
+class ParseFilenameResponse(BaseModel):
+    track_id: int
+    source: Literal["heuristic", "ai"] = "heuristic"
+    confidence: float = 0.0
+    note: str | None = None
+    fields: ParsedFields
+    diffs: list[FieldDiff] = Field(default_factory=list)
+    applied: bool = False
+
+
+# --------------------------------------------------------------------------- #
 # 封面批量导出
 # --------------------------------------------------------------------------- #
 class CoverBatchExportRequest(BaseModel):

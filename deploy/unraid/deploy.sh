@@ -59,19 +59,35 @@ COPYFILE_DISABLE=1 tar czf - \
       echo '    源码与数据目录就绪'
     "
 
-# ---------- 2) 注册 Compose Manager 栈（保留已生成的密钥） ----------
+# ---------- 2) 注册 Compose Manager 栈（保留已生成的密钥与自定义配置） ----------
 echo "==> 配置 Compose Manager 栈"
-SECRET="$(ssh "${SSH_OPTS[@]}" "$NAS_HOST" \
-  "if [ -f '$STACK_DIR/.env' ]; then sed -n 's/^APP_SECRET_KEY=//p' '$STACK_DIR/.env'; else openssl rand -hex 32; fi")"
+REMOTE_ENV="$(ssh "${SSH_OPTS[@]}" "$NAS_HOST" "cat '$STACK_DIR/.env' 2>/dev/null || true")"
+SECRET="$(printf '%s\n' "$REMOTE_ENV" | sed -n 's/^APP_SECRET_KEY=//p')"
+if [ -z "$SECRET" ]; then
+  SECRET="$(ssh "${SSH_OPTS[@]}" "$NAS_HOST" 'openssl rand -hex 32')"
+fi
+
+# 保留脚本不管理的键（例如手填的 AI_API_KEY / ACOUSTID_API_KEY），避免部署时被覆盖
+EXTRA_ENV="$(printf '%s\n' "$REMOTE_ENV" \
+  | grep -vE '^(APP_DIR|MUSIC_PATH|PORT|APP_SECRET_KEY)=' \
+  | grep -v '^[[:space:]]*$' || true)"
+# 也允许通过环境变量直接下发这些可选配置
+for KEY in AI_ENABLED AI_BASE_URL AI_MODEL AI_API_KEY ACOUSTID_API_KEY; do
+  VALUE="${!KEY:-}"
+  if [ -n "$VALUE" ]; then
+    EXTRA_ENV="${EXTRA_ENV}${EXTRA_ENV:+$'\n'}${KEY}=${VALUE}"
+  fi
+done
 
 ssh "${SSH_OPTS[@]}" "$NAS_HOST" "mkdir -p '$STACK_DIR'"
 ssh "${SSH_OPTS[@]}" "$NAS_HOST" "cat > '$STACK_DIR/docker-compose.yml'" < "$SCRIPT_DIR/docker-compose.yml"
-ssh "${SSH_OPTS[@]}" "$NAS_HOST" "cat > '$STACK_DIR/.env'" <<EOF
-APP_DIR=$APP_DIR
-MUSIC_PATH=$MUSIC_PATH
-PORT=$PORT
-APP_SECRET_KEY=$SECRET
-EOF
+{
+  echo "APP_DIR=$APP_DIR"
+  echo "MUSIC_PATH=$MUSIC_PATH"
+  echo "PORT=$PORT"
+  echo "APP_SECRET_KEY=$SECRET"
+  printf '%s\n' "$EXTRA_ENV"
+} | ssh "${SSH_OPTS[@]}" "$NAS_HOST" "cat > '$STACK_DIR/.env'"
 echo "    已写入 $STACK_DIR/{docker-compose.yml,.env}"
 
 # ---------- 3) 迁移历史数据并清理旧部署 ----------

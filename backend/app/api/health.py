@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from app import __version__
 from app.core.config import get_settings
 from app.models.schemas import HealthResponse
+from app.services.ai_parser import is_ai_available
 from app.services.convert_service import ffmpeg_available, fpcalc_available
 
 router = APIRouter(tags=["meta"])
@@ -31,5 +32,5 @@ def version() -> dict[str, str]:
 
 @router.get("/capabilities")
 def capabilities() -> dict[str, bool]:
-    """外部可选依赖检测结果（核心功能零 ffmpeg 依赖）。"""
-    return {"ffmpeg": ffmpeg_available(), "fpcalc": fpcalc_available()}
+    """可选能力检测（核心功能零 ffmpeg 依赖；AI 辅助默认关闭）。"""
+    return {"ffmpeg": ffmpeg_available(), "fpcalc": fpcalc_available(), "ai": is_ai_available()}

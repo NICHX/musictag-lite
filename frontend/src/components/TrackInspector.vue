@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
-import { coverApi, logsApi, lyricsApi, trackApi } from '@/api/endpoints'
-import type { OperationLog, Track } from '@/api/types'
+import { coverApi, filenameApi, logsApi, lyricsApi, systemApi, trackApi } from '@/api/endpoints'
+import type { OperationLog, ParseFilenameResponse, Track } from '@/api/types'
 import { extractAccent } from '@/lib/accent'
 import { formatBitrate, formatDateTime, formatDuration, formatSize } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
@@ -39,6 +39,68 @@ const error = ref<string | null>(null)
 const coverVersion = ref(0)
 const coverBroken = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+const parsing = ref(false)
+const parsed = ref<ParseFilenameResponse | null>(null)
+const aiAvailable = ref(false)
+let capabilitiesPromise: Promise<void> | null = null
+
+function ensureCapabilities(): Promise<void> {
+  if (!capabilitiesPromise) {
+    capabilitiesPromise = systemApi
+      .capabilities()
+      .then((caps) => {
+        aiAvailable.value = caps.ai
+      })
+      .catch(() => {
+        aiAvailable.value = false
+      })
+  }
+  return capabilitiesPromise
+}
+
+async function parseName(useAi: boolean): Promise<void> {
+  if (!track.value) return
+  parsing.value = true
+  error.value = null
+  message.value = null
+  parsed.value = null
+  try {
+    parsed.value = await filenameApi.parse(track.value.id, useAi, false)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '解析失败'
+  } finally {
+    parsing.value = false
+  }
+}
+
+async function applyParsed(): Promise<void> {
+  if (!track.value || !parsed.value) return
+  const id = track.value.id
+  parsing.value = true
+  error.value = null
+  try {
+    const result = await filenameApi.parse(id, parsed.value.source === 'ai', true)
+    parsed.value = null
+    message.value = result.applied ? '已按文件名写入标签' : '无需修改'
+    await load(id)
+    if (track.value) emit('saved', track.value)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '写入失败'
+  } finally {
+    parsing.value = false
+  }
+}
+
+function fillForm(): void {
+  if (!parsed.value) return
+  for (const [key, value] of Object.entries(parsed.value.fields)) {
+    if (value !== null && value !== undefined && key in form.value) {
+      form.value[key] = String(value)
+    }
+  }
+  parsed.value = null
+  message.value = '已填入表单，确认后点保存'
+}
 
 const coverUrl = computed(() =>
   track.value ? `${coverApi.url(track.value.id)}?v=${coverVersion.value}` : '',
@@ -49,6 +111,8 @@ async function load(id: number): Promise<void> {
   error.value = null
   message.value = null
   coverBroken.value = false
+  parsed.value = null
+  void ensureCapabilities()
   try {
     const data = await trackApi.get(id)
     track.value = data
@@ -253,6 +317,71 @@ watch(
             >
               在线刮削
             </RouterLink>
+          </div>
+        </div>
+
+        <!-- 文件名解析（仅手动触发；预览后确认再写入） -->
+        <div class="mt-5 rounded-card border border-border bg-surface-2 px-3 py-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="mr-auto text-xs text-muted">从文件名推断标签</span>
+            <button
+              type="button"
+              class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-brand/60 hover:text-text disabled:opacity-50"
+              :disabled="parsing || loading"
+              @click="parseName(false)"
+            >
+              {{ parsing ? '解析中…' : '按文件名解析' }}
+            </button>
+            <button
+              v-if="aiAvailable"
+              type="button"
+              class="rounded-control border border-brand/50 px-2.5 py-1 text-xs text-brand transition-colors hover:bg-brand/10 disabled:opacity-50"
+              :disabled="parsing || loading"
+              @click="parseName(true)"
+            >
+              AI 解析
+            </button>
+          </div>
+
+          <div v-if="parsed" class="mt-3 border-t border-border/60 pt-3 text-xs">
+            <p class="text-muted">
+              来源：{{ parsed.source === 'ai' ? 'AI' : '本地规则' }} · 置信度
+              {{ Math.round(parsed.confidence * 100) }}%<span v-if="parsed.note"> · {{ parsed.note }}</span>
+            </p>
+            <ul v-if="parsed.diffs.length" class="mt-2 space-y-1">
+              <li v-for="diff in parsed.diffs" :key="diff.field" class="flex items-center gap-2">
+                <span class="w-14 shrink-0 font-mono text-muted">{{ diff.field }}</span>
+                <span class="min-w-0 truncate text-muted">{{ diff.old_value ?? '∅' }}</span>
+                <span class="shrink-0 text-muted">→</span>
+                <span class="min-w-0 truncate text-text">{{ diff.new_value ?? '∅' }}</span>
+              </li>
+            </ul>
+            <p v-else class="mt-2 text-muted">解析结果与现有标签一致，无需修改。</p>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                class="rounded-control bg-brand px-3 py-1 text-xs font-medium text-bg transition-colors hover:bg-brand-600 disabled:opacity-50"
+                :disabled="parsing || !parsed.diffs.length"
+                @click="applyParsed"
+              >
+                写入文件
+              </button>
+              <button
+                type="button"
+                class="rounded-control border border-border px-3 py-1 text-xs text-muted transition-colors hover:text-text disabled:opacity-50"
+                :disabled="parsing || !parsed.diffs.length"
+                @click="fillForm"
+              >
+                填入表单
+              </button>
+              <button
+                type="button"
+                class="rounded-control px-3 py-1 text-xs text-muted transition-colors hover:text-text"
+                @click="parsed = null"
+              >
+                取消
+              </button>
+            </div>
           </div>
         </div>
 

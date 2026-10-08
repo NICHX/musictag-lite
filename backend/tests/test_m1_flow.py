@@ -141,3 +141,37 @@ def test_scan_list_edit_cover_lyrics_batch(client, library) -> None:
     task = _wait_task(client, applied.json()["task_id"])
     assert task["status"] == "succeeded", task
     assert io.read(Path(other["path"])).tags.album == "21"
+
+
+def test_parse_filename_preview_then_apply(client, library) -> None:
+    """文件名解析接口：先预览（不写盘），确认后再应用。"""
+    lib_id = library["id"]
+    _scan(client, lib_id)
+    page = client.get("/api/tracks", params={"library_id": lib_id}).json()
+    flac = next(t for t in page["items"] if t["filename"].endswith("01 Rolling.flac"))
+
+    # 1) 预览：解析出 title=Rolling / track_no=1，但不落盘
+    preview = client.post(
+        f"/api/tracks/{flac['id']}/parse-filename", json={"use_ai": False, "apply": False}
+    )
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["source"] == "heuristic"
+    assert body["fields"]["title"] == "Rolling"
+    assert body["fields"]["track_no"] == 1
+    assert body["applied"] is False
+    assert io.read(Path(flac["path"])).tags.title is None
+
+    # 2) 应用：写入文件
+    applied = client.post(
+        f"/api/tracks/{flac['id']}/parse-filename", json={"use_ai": False, "apply": True}
+    ).json()
+    assert applied["applied"] is True
+    assert io.read(Path(flac["path"])).tags.title == "Rolling"
+
+    # 3) AI 未配置时给出明确错误
+    ai = client.post(
+        f"/api/tracks/{flac['id']}/parse-filename", json={"use_ai": True, "apply": False}
+    )
+    assert ai.status_code == 400
+    assert "AI" in ai.json()["detail"]

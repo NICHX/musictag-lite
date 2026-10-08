@@ -183,6 +183,30 @@ export interface ScrapeApplyResponse {
   diffs: FieldDiff[]
 }
 
+/** 文件名解析（F11 的文件名 → 标签方向） */
+export interface ParsedFields {
+  title: string | null
+  artist: string | null
+  album: string | null
+  track_no: number | null
+}
+
+export interface ParseFilenameResponse {
+  track_id: number
+  source: 'heuristic' | 'ai'
+  confidence: number
+  note: string | null
+  fields: ParsedFields
+  diffs: FieldDiff[]
+  applied: boolean
+}
+
+export interface Capabilities {
+  ffmpeg: boolean
+  fpcalc: boolean
+  ai: boolean
+}
+
 /** 可编辑字段（与后端 EDITABLE_FIELDS 对齐） */
 export type EditableField =
   | 'title'

@@ -5,11 +5,13 @@ import type {
   BatchEditRequest,
   BatchPreviewResponse,
   Candidate,
+  Capabilities,
   CoverMeta,
   Library,
   LyricsRead,
   OperationLog,
   Page,
+  ParseFilenameResponse,
   Provider,
   ScrapeApplyResponse,
   ScrapeSearchResponse,
@@ -111,4 +113,17 @@ export const providerApi = {
   list: () => api.get<Provider[]>('/providers'),
   update: (key: string, body: { enabled?: boolean; priority?: number }) =>
     api.patch<Provider>(`/providers/${key}`, body),
+}
+
+/** 文件名解析（F11）：use_ai 需后端已配置 AI；apply=false 时仅预览 */
+export const filenameApi = {
+  parse: (trackId: number, useAi = false, apply = false) =>
+    api.post<ParseFilenameResponse>(`/tracks/${trackId}/parse-filename`, {
+      use_ai: useAi,
+      apply,
+    }),
+}
+
+export const systemApi = {
+  capabilities: () => api.get<Capabilities>('/capabilities'),
 }
