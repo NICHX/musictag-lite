@@ -33,6 +33,7 @@ const applied = ref<ScrapeApplyResponse | null>(null)
 const appliedTrack = ref<Track | null>(null)
 const coverVersion = ref(0)
 const brokeCover = ref(false)
+const brokeAppliedCover = ref(false)
 const brokenCandidates = ref<Set<string>>(new Set())
 const asideEl = ref<HTMLElement | null>(null)
 
@@ -139,6 +140,7 @@ async function apply(): Promise<void> {
     appliedTrack.value = refreshed
     coverVersion.value += 1
     brokeCover.value = false
+    brokeAppliedCover.value = false
     scrapeStore.setLastMatched({
       id: trackId,
       title: refreshed?.title ?? null,
@@ -297,7 +299,20 @@ onMounted(async () => {
 
           <div class="mt-3 flex gap-3">
             <div class="h-16 w-16 shrink-0 overflow-hidden rounded-card border border-border bg-surface-2">
-              <img :src="appliedCoverUrl" alt="写入后的封面" class="h-full w-full object-cover" />
+              <img
+                v-if="applied.cover_applied && appliedTrack?.has_cover && !brokeAppliedCover"
+                :src="appliedCoverUrl"
+                alt="写入后的封面"
+                class="h-full w-full object-cover"
+                @error="brokeAppliedCover = true"
+              />
+              <div v-else class="grid h-full w-full place-items-center text-muted" aria-hidden="true">
+                <svg viewBox="0 0 64 64" fill="none" class="h-6 w-6">
+                  <circle cx="32" cy="32" r="26" stroke="currentColor" stroke-width="1.5" />
+                  <circle cx="32" cy="32" r="9" stroke="currentColor" stroke-width="1.5" />
+                  <circle cx="32" cy="32" r="2.5" fill="currentColor" />
+                </svg>
+              </div>
             </div>
             <div class="min-w-0">
               <p class="truncate text-sm font-medium">{{ appliedTrack?.title || '（无标题）' }}</p>
