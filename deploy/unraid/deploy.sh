@@ -38,9 +38,12 @@ echo "    曲库     : $MUSIC_PATH  ->  /music"
 echo "    端口     : $PORT"
 echo
 
-# ---------- 1) 同步源码（排除构建产物；禁用 macOS AppleDouble 侧车文件） ----------
+# ---------- 1) 同步源码（排除构建产物；禁用 macOS AppleDouble 与扩展属性） ----------
 echo "==> 同步源码到 NAS"
-COPYFILE_DISABLE=1 tar czf - \
+# COPYFILE_DISABLE=1 抑制 AppleDouble 的 ._* 侧车文件；
+# --no-xattrs 阻止 bsdtar 把扩展属性（com.apple.provenance/macl）写成 pax 头，
+# 否则目标端 GNU tar 会打印「Ignoring unknown extended header keyword」。
+COPYFILE_DISABLE=1 tar --no-xattrs -czf - \
   --exclude='./.git' \
   --exclude='./frontend/node_modules' \
   --exclude='./backend/.venv' \
