@@ -12,6 +12,7 @@ from app.core.db import get_session
 from app.core.tasks import task_manager
 from app.models.db import Library, Track
 from app.models.schemas import LibraryCreate, LibraryRead, LibraryUpdate, TaskAccepted
+from app.services.maintenance import purge_library_tracks
 from app.services.scanner import Scanner
 
 router = APIRouter(prefix="/libraries", tags=["libraries"])
@@ -89,7 +90,9 @@ def update_library(
 
 @router.delete("/{library_id}", status_code=204)
 def delete_library(library_id: int, session: Session = Depends(get_session)) -> None:
+    """删除音乐库及其曲目索引（仅数据库记录，磁盘上的音频文件不受影响）。"""
     lib = _get_or_404(session, library_id)
+    purge_library_tracks(session, library_id)
     session.delete(lib)
     session.commit()
 

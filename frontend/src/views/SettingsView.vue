@@ -9,6 +9,7 @@ const libraries = ref<Library[]>([])
 const providers = ref<Provider[]>([])
 const health = ref<Health | null>(null)
 const error = ref<string | null>(null)
+const notice = ref<string | null>(null)
 const creating = ref(false)
 const newName = ref('')
 const newPath = ref('')
@@ -87,6 +88,7 @@ async function removeLibrary(library: Library): Promise<void> {
   try {
     await api.delete(`/libraries/${library.id}`)
     libraries.value = libraries.value.filter((item) => item.id !== library.id)
+    notice.value = `已移除「${library.name}」及其 ${library.track_count} 条曲目索引（磁盘文件未改动）`
   } catch (e) {
     error.value = e instanceof Error ? e.message : '删除失败'
   }
@@ -111,6 +113,9 @@ onMounted(load)
 
     <p v-if="error" class="mt-4 rounded-control border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
       {{ error }}
+    </p>
+    <p v-if="notice" class="mt-4 rounded-control border border-info/40 bg-info/10 px-3 py-2 text-sm text-info">
+      {{ notice }}
     </p>
 
     <div class="mt-6 space-y-6">
