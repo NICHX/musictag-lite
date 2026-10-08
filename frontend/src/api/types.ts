@@ -102,3 +102,98 @@ export interface Health {
   environment: string
   ffmpeg: boolean
 }
+
+export interface TaskAccepted {
+  task_id: number
+  status: string
+}
+
+export interface FieldDiff {
+  field: string
+  old_value: unknown
+  new_value: unknown
+}
+
+export interface TrackDiff {
+  track_id: number
+  path: string
+  changes: FieldDiff[]
+}
+
+export interface BatchPreviewResponse {
+  total: number
+  changed: number
+  items: TrackDiff[]
+}
+
+export interface BatchEditOp {
+  field: string
+  op: 'set' | 'fill_empty' | 'append' | 'replace'
+  value?: unknown
+  find?: string | null
+  replace?: string | null
+  use_regex?: boolean
+}
+
+export interface BatchEditRequest {
+  ids: number[]
+  ops: BatchEditOp[]
+  strategy: 'overwrite' | 'fill_empty' | 'append' | 'replace'
+  dry_run?: boolean
+}
+
+export interface CoverMeta {
+  track_id: number
+  available: boolean
+  source: 'embedded' | 'file' | 'scraped' | null
+  mime: string | null
+}
+
+export interface LyricsRead {
+  track_id: number
+  available: boolean
+  format: 'lrc' | 'embedded'
+  source: string | null
+  content: string | null
+}
+
+export interface Candidate {
+  provider: string
+  external_id: string
+  title: string | null
+  artist: string | null
+  album: string | null
+  year: string | null
+  track_no: number | null
+  score: number
+  cover_url: string | null
+  payload: Record<string, unknown>
+}
+
+export interface ScrapeSearchResponse {
+  track_id: number | null
+  candidates: Candidate[]
+}
+
+export interface ScrapeApplyResponse {
+  track_id: number
+  applied_fields: string[]
+  cover_applied: boolean
+  lyrics_applied: boolean
+  diffs: FieldDiff[]
+}
+
+/** 可编辑字段（与后端 EDITABLE_FIELDS 对齐） */
+export type EditableField =
+  | 'title'
+  | 'artist'
+  | 'album'
+  | 'album_artist'
+  | 'composer'
+  | 'genre'
+  | 'track_no'
+  | 'disc_no'
+  | 'year'
+  | 'date'
+  | 'comment'
+
