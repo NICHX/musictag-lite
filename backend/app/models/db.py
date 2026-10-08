@@ -39,6 +39,7 @@ class TagStatus(StrEnum):
 class TaskType(StrEnum):
     scan = "scan"
     batch_edit = "batch_edit"
+    parse_filename = "parse_filename"
     scrape = "scrape"
     organize = "organize"
     convert = "convert"

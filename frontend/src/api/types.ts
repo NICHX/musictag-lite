@@ -240,6 +240,32 @@ export interface ParseFilenameResponse {
   applied: boolean
 }
 
+/** 批量文件名解析（F11 的文件名→标签方向） */
+export interface ParseFilenameBatchRequest {
+  ids: number[]
+  use_ai: boolean
+  strategy: 'fill_empty' | 'overwrite'
+}
+
+export interface ParseFilenameBatchItem {
+  track_id: number
+  path: string
+  source: 'heuristic' | 'ai'
+  confidence: number
+  note: string | null
+  fields: ParsedFields
+  diffs: FieldDiff[]
+  status: 'ok' | 'unchanged' | 'invalid'
+}
+
+export interface ParseFilenameBatchResponse {
+  total: number
+  changed: number
+  unchanged: number
+  invalid: number
+  items: ParseFilenameBatchItem[]
+}
+
 export interface Capabilities {
   ffmpeg: boolean
   fpcalc: boolean

@@ -451,6 +451,33 @@ class ParseFilenameResponse(BaseModel):
     applied: bool = False
 
 
+class ParseFilenameBatchRequest(BaseModel):
+    ids: list[int] = Field(min_length=1)
+    use_ai: bool = Field(default=False, description="是否调用 AI 辅助（需在设置中配置）")
+    strategy: Literal["fill_empty", "overwrite"] = Field(
+        default="fill_empty", description="fill_empty 仅补空字段；overwrite 以解析结果为准"
+    )
+
+
+class ParseFilenameBatchItem(BaseModel):
+    track_id: int
+    path: str
+    source: Literal["heuristic", "ai"] = "heuristic"
+    confidence: float = 0.0
+    note: str | None = None
+    fields: ParsedFields
+    diffs: list[FieldDiff] = Field(default_factory=list)
+    status: Literal["ok", "unchanged", "invalid"] = "ok"
+
+
+class ParseFilenameBatchResponse(BaseModel):
+    total: int = 0
+    changed: int = 0
+    unchanged: int = 0
+    invalid: int = 0
+    items: list[ParseFilenameBatchItem] = Field(default_factory=list)
+
+
 # --------------------------------------------------------------------------- #
 # 封面批量导出
 # --------------------------------------------------------------------------- #

@@ -13,21 +13,27 @@ from sqlmodel import Session, select
 
 from app.api.deps import ensure_track_path, get_track_or_404
 from app.audio.mutagen_io import UnsupportedFormatError
-from app.core.db import get_session
+from app.core.db import get_session, session_scope
+from app.core.tasks import task_manager
 from app.models.db import Track
 from app.models.schemas import (
     FieldDiff,
     Page,
     ParsedFields,
+    ParseFilenameBatchRequest,
+    ParseFilenameBatchResponse,
     ParseFilenameRequest,
     ParseFilenameResponse,
+    TaskAccepted,
     TrackFacets,
     TrackRead,
     TrackUpdate,
 )
 from app.services import ai_config
+from app.services.ai_config import AIConfig
 from app.services.ai_parser import AIUnavailableError, parse_filename_with_ai
 from app.services.filename_parser import parse_filename
+from app.services.filename_service import FilenameParseService
 from app.services.scrape_orchestrator import scrape_orchestrator
 from app.services.stream_service import build_stream_response
 from app.services.tag_service import SOURCE_MANUAL, TagService
@@ -226,3 +232,50 @@ async def parse_track_filename(
         diffs=diffs,
         applied=applied,
     )
+
+
+def _resolve_ai_or_400(session: Session, use_ai: bool) -> AIConfig | None:
+    """``use_ai`` 时先校验 AI 可用性，避免批量任务启动后才失败。"""
+    if not use_ai:
+        return None
+    config = ai_config.resolve(session)
+    if not config.available:
+        raise HTTPException(status_code=400, detail="AI 辅助不可用：请在设置中启用并配置 API Key")
+    return config
+
+
+@router.post("/parse-filename/preview", response_model=ParseFilenameBatchResponse)
+async def parse_filenames_preview(
+    payload: ParseFilenameBatchRequest, session: Session = Depends(get_session)
+) -> ParseFilenameBatchResponse:
+    """批量按文件名解析标签（dry-run）：列出解析结果与将写入的差异，不写盘。"""
+    config = _resolve_ai_or_400(session, payload.use_ai)
+    result = await FilenameParseService().preview(
+        session, payload.ids, use_ai=payload.use_ai, strategy=payload.strategy, config=config
+    )
+    return ParseFilenameBatchResponse(**result)
+
+
+@router.post("/parse-filename", response_model=TaskAccepted)
+async def parse_filenames_apply(payload: ParseFilenameBatchRequest) -> TaskAccepted:
+    """批量按文件名写回标签（后台任务）。"""
+    with session_scope() as session:
+        config = _resolve_ai_or_400(session, payload.use_ai)
+
+    async def runner(ctx) -> None:  # noqa: ANN001
+        await ctx.set_total(len(payload.ids))
+        with session_scope() as session:
+            stats = await FilenameParseService().apply(
+                session,
+                payload.ids,
+                use_ai=payload.use_ai,
+                strategy=payload.strategy,
+                config=config,
+            )
+        await ctx.message(
+            f"文件名解析完成：写入 {stats['changed']} / 共 {stats['total']}，"
+            f"跳过 {stats['unchanged'] + stats['invalid']}，失败 {stats['failed']}"
+        )
+
+    task_id = await task_manager.run("parse_filename", runner, total=len(payload.ids))
+    return TaskAccepted(task_id=task_id)

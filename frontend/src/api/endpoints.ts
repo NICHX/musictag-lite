@@ -16,6 +16,8 @@ import type {
   OrganizePreviewResponse,
   OrganizeRequest,
   Page,
+  ParseFilenameBatchRequest,
+  ParseFilenameBatchResponse,
   ParseFilenameResponse,
   Provider,
   ScrapeApplyResponse,
@@ -136,6 +138,14 @@ export const organizeApi = {
   preview: (body: OrganizeRequest) =>
     api.post<OrganizePreviewResponse>('/organize/preview', body),
   apply: (body: OrganizeApplyRequest) => api.post<TaskAccepted>('/organize/apply', body),
+}
+
+/** 批量文件名解析（F11 的「文件名→标签」方向） */
+export const filenameBatchApi = {
+  preview: (body: ParseFilenameBatchRequest) =>
+    api.post<ParseFilenameBatchResponse>('/tracks/parse-filename/preview', body),
+  apply: (body: ParseFilenameBatchRequest) =>
+    api.post<TaskAccepted>('/tracks/parse-filename', body),
 }
 
 export const systemApi = {
