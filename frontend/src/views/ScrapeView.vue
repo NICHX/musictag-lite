@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import EmptyState from '@/components/EmptyState.vue'
@@ -34,6 +34,14 @@ const appliedTrack = ref<Track | null>(null)
 const coverVersion = ref(0)
 const brokeCover = ref(false)
 const brokenCandidates = ref<Set<string>>(new Set())
+const asideEl = ref<HTMLElement | null>(null)
+
+/** 候选默认只展示前若干条，避免把整页撑长 */
+const CANDIDATE_PREVIEW = 5
+const showAllCandidates = ref(false)
+const visibleCandidates = computed(() =>
+  showAllCandidates.value ? candidates.value : candidates.value.slice(0, CANDIDATE_PREVIEW),
+)
 
 const currentTrack = computed<Track | null>(
   () => store.tracks.find((track) => track.id === selectedTrackId.value) ?? null,
@@ -72,6 +80,13 @@ function fieldLabel(key: string): string {
   return PLAN_FIELDS.find((item) => item.key === key)?.label ?? key
 }
 
+/** 匹配度配色：≥0.8 可信、≥0.6 尚可、以下偏弱（与后端 0.6 自动应用阈值呼应）。 */
+function scoreTone(score: number): string {
+  if (score >= 0.8) return 'text-success'
+  if (score >= 0.6) return 'text-text'
+  return 'text-muted'
+}
+
 function markCoverBroken(uid: string): void {
   brokenCandidates.value = new Set(brokenCandidates.value).add(uid)
 }
@@ -92,6 +107,7 @@ async function search(): Promise<void> {
   chosenUid.value = null
   applied.value = null
   appliedTrack.value = null
+  showAllCandidates.value = false
   try {
     const response = await scrapeApi.search({ track_id: selectedTrackId.value, limit: 10 })
     candidates.value = response.candidates
@@ -131,6 +147,9 @@ async function apply(): Promise<void> {
     })
     tasks.connect()
     void tasks.refresh()
+    // 回执出现在左栏（按钮处），确保与小屏用户当前视线一致
+    await nextTick()
+    asideEl.value?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   } catch (e) {
     error.value = e instanceof Error ? e.message : '应用失败'
   } finally {
@@ -213,7 +232,7 @@ onMounted(async () => {
 
     <div class="mt-5 grid gap-5 lg:grid-cols-[20rem_1fr]">
       <!-- 当前曲目 + 本次将写入 -->
-      <aside class="flex flex-col gap-4 self-start lg:sticky lg:top-4">
+      <aside ref="asideEl" class="flex flex-col gap-4 self-start lg:sticky lg:top-4">
         <div class="rounded-card border border-border bg-surface p-4">
           <h2 class="text-xs font-medium uppercase tracking-wide text-muted">当前曲目</h2>
 
@@ -263,8 +282,68 @@ onMounted(async () => {
           </dl>
         </div>
 
+        <!-- 已写入回执：原地替换「本次将写入」，与点击位置同屏 -->
+        <div
+          v-if="applied"
+          aria-live="polite"
+          class="rounded-card border border-success/40 bg-success/5 p-4"
+        >
+          <div class="flex items-center justify-between">
+            <h2 class="text-xs font-medium uppercase tracking-wide text-success">已写入</h2>
+            <span class="text-[11px] text-muted">匹配完成</span>
+          </div>
+
+          <div class="mt-3 flex gap-3">
+            <div class="h-16 w-16 shrink-0 overflow-hidden rounded-card border border-border bg-surface-2">
+              <img :src="appliedCoverUrl" alt="写入后的封面" class="h-full w-full object-cover" />
+            </div>
+            <div class="min-w-0">
+              <p class="truncate text-sm font-medium">{{ appliedTrack?.title || '（无标题）' }}</p>
+              <p class="truncate text-xs text-muted">
+                {{ appliedTrack?.artist || '未知艺术家' }}
+              </p>
+              <p class="mt-1 text-[11px] text-muted">
+                封面{{ applied.cover_applied ? '已写入' : '未写入' }} · 歌词{{
+                  applied.lyrics_applied ? '已写入' : '未写入'
+                }}
+              </p>
+            </div>
+          </div>
+
+          <ul v-if="applied.diffs.length" class="mt-3 space-y-1 border-t border-success/20 pt-3 text-xs">
+            <li v-for="diff in applied.diffs" :key="diff.field" class="flex flex-wrap items-center gap-2">
+              <span class="w-12 shrink-0 text-muted">{{ fieldLabel(diff.field) }}</span>
+              <span class="min-w-0 max-w-[6rem] truncate line-through opacity-60">
+                {{ diff.old_value ?? '∅' }}
+              </span>
+              <span class="shrink-0 text-muted">→</span>
+              <span class="min-w-0 max-w-[8rem] truncate text-success">{{ diff.new_value ?? '∅' }}</span>
+            </li>
+          </ul>
+          <p v-else class="mt-3 border-t border-success/20 pt-3 text-xs text-muted">
+            标签与原有值一致，未做改动。
+          </p>
+
+          <div class="mt-3 flex flex-col gap-2">
+            <button
+              type="button"
+              class="rounded-control bg-brand px-3.5 py-2 text-sm font-medium text-bg transition-colors hover:bg-brand-600"
+              @click="backToLibrary"
+            >
+              返回资源库（已定位到这首）
+            </button>
+            <button
+              type="button"
+              class="rounded-control border border-border px-3.5 py-2 text-sm text-muted transition-colors hover:text-text"
+              @click="resetResult"
+            >
+              继续匹配其他候选
+            </button>
+          </div>
+        </div>
+
         <!-- 本次将写入：点应用前即可见 -->
-        <div class="rounded-card border border-border bg-surface p-4">
+        <div v-else class="rounded-card border border-border bg-surface p-4">
           <h2 class="text-xs font-medium uppercase tracking-wide text-muted">本次将写入</h2>
 
           <p v-if="!chosenCandidate" class="mt-3 text-xs text-muted">
@@ -319,7 +398,13 @@ onMounted(async () => {
           <h2 class="text-xs font-medium uppercase tracking-wide text-muted">
             候选（{{ candidates.length }}）
           </h2>
-          <span v-if="candidates.length" class="text-[11px] text-muted">已按匹配度排序</span>
+          <span v-if="candidates.length" class="text-[11px] text-muted">
+            {{
+              showAllCandidates
+                ? `共 ${candidates.length} 条 · 按匹配度排序`
+                : `显示前 ${Math.min(CANDIDATE_PREVIEW, candidates.length)} / ${candidates.length} 条 · 按匹配度排序`
+            }}
+          </span>
         </div>
 
         <p v-if="searching" class="py-10 text-center text-sm text-muted">搜索中…</p>
@@ -330,11 +415,11 @@ onMounted(async () => {
           description="在上方选择一首曲目并点击「搜索候选」，结果会按匹配度排序，并标注与当前标签的差异。"
         />
 
-        <ul v-else class="mt-3 space-y-2.5">
-          <li v-for="(candidate, index) in candidates" :key="scrapeApi.list(candidate)">
+        <ul v-else class="mt-3 space-y-2">
+          <li v-for="(candidate, index) in visibleCandidates" :key="scrapeApi.list(candidate)">
             <button
               type="button"
-              class="flex w-full gap-3 rounded-card border p-3 text-left transition-colors"
+              class="flex w-full items-start gap-2.5 rounded-card border p-2.5 text-left transition-colors"
               :class="
                 chosenUid === scrapeApi.list(candidate)
                   ? 'border-brand bg-brand/5'
@@ -345,7 +430,7 @@ onMounted(async () => {
             >
               <!-- 候选封面 -->
               <span
-                class="h-16 w-16 shrink-0 overflow-hidden rounded-card border border-border bg-surface-2"
+                class="h-12 w-12 shrink-0 overflow-hidden rounded-control border border-border bg-surface-2"
               >
                 <img
                   v-if="candidate.cover_url && !brokenCandidates.has(scrapeApi.list(candidate))"
@@ -356,7 +441,7 @@ onMounted(async () => {
                   @error="markCoverBroken(scrapeApi.list(candidate))"
                 />
                 <span v-else class="grid h-full w-full place-items-center text-muted" aria-hidden="true">
-                  <svg viewBox="0 0 64 64" fill="none" class="h-6 w-6">
+                  <svg viewBox="0 0 64 64" fill="none" class="h-5 w-5">
                     <circle cx="32" cy="32" r="26" stroke="currentColor" stroke-width="1.5" />
                     <circle cx="32" cy="32" r="9" stroke="currentColor" stroke-width="1.5" />
                     <circle cx="32" cy="32" r="2.5" fill="currentColor" />
@@ -365,14 +450,14 @@ onMounted(async () => {
               </span>
 
               <span class="min-w-0 flex-1">
-                <span class="flex items-baseline gap-2">
+                <span class="flex items-center gap-1.5">
                   <span v-if="index === 0" class="shrink-0 rounded-full bg-brand/15 px-1.5 py-0.5 text-[10px] text-brand">
                     最佳
                   </span>
-                  <span class="min-w-0 truncate text-sm font-medium">
+                  <span class="min-w-0 flex-1 truncate text-sm font-medium">
                     {{ candidate.title || '（无标题）' }}
                   </span>
-                  <span class="ml-auto shrink-0 font-mono text-[11px] text-muted">
+                  <span class="shrink-0 font-mono text-[11px]" :class="scoreTone(candidate.score)">
                     {{ Math.round(candidate.score * 100) }} 分
                   </span>
                 </span>
@@ -383,14 +468,7 @@ onMounted(async () => {
                   <template v-if="candidate.year"> · {{ candidate.year }}</template>
                 </span>
 
-                <span class="mt-1.5 block h-1 overflow-hidden rounded-full bg-border" aria-hidden="true">
-                  <span
-                    class="block h-full rounded-full bg-brand"
-                    :style="{ width: `${Math.round(candidate.score * 100)}%` }"
-                  />
-                </span>
-
-                <span class="mt-2 flex flex-wrap items-center gap-1.5">
+                <span class="mt-1.5 flex flex-wrap items-center gap-1.5">
                   <span
                     v-if="!candidateFields(candidate).length"
                     class="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted"
@@ -408,67 +486,55 @@ onMounted(async () => {
                     {{ providerNames[candidate.provider] ?? candidate.provider }}
                   </span>
                 </span>
+
+                <span class="mt-1.5 block h-0.5 overflow-hidden rounded-full bg-border" aria-hidden="true">
+                  <span
+                    class="block h-full rounded-full bg-brand"
+                    :style="{ width: `${Math.round(candidate.score * 100)}%` }"
+                  />
+                </span>
               </span>
             </button>
           </li>
         </ul>
-      </div>
-    </div>
 
-    <!-- 应用结果 -->
-    <div
-      v-if="applied"
-      aria-live="polite"
-      class="mt-5 rounded-card border border-success/40 bg-success/5 p-4"
-    >
-      <h2 class="text-xs font-medium uppercase tracking-wide text-success">已写入</h2>
-      <div class="mt-3 flex flex-wrap gap-4">
-        <div class="h-20 w-20 shrink-0 overflow-hidden rounded-card border border-border bg-surface-2">
-          <img :src="appliedCoverUrl" alt="写入后的封面" class="h-full w-full object-cover" />
+        <div v-if="candidates.length > CANDIDATE_PREVIEW" class="mt-3 text-center">
+          <button
+            type="button"
+            class="rounded-control border border-border px-3 py-1 text-xs text-muted transition-colors hover:text-text"
+            @click="showAllCandidates = !showAllCandidates"
+          >
+            {{ showAllCandidates ? '收起' : `显示全部 ${candidates.length} 条` }}
+          </button>
         </div>
 
-        <div class="min-w-0 flex-1">
-          <p class="text-sm font-medium">
-            {{ appliedTrack?.title || '（无标题）' }}
-            <span class="text-muted">— {{ appliedTrack?.artist || '未知艺术家' }}</span>
-          </p>
+        <!-- 小屏：动作放在列表下方，避免来回滚动 -->
+        <button
+          v-if="candidates.length && !applied"
+          type="button"
+          class="mt-3 w-full rounded-control bg-brand px-4 py-2 text-sm font-medium text-bg transition-colors hover:bg-brand-600 disabled:opacity-50 lg:hidden"
+          :disabled="applying || !chosenUid"
+          @click="apply"
+        >
+          {{ applying ? '应用中…' : `应用选中候选${writableCount ? `（${writableCount} 项）` : ''}` }}
+        </button>
 
-          <ul v-if="applied.diffs.length" class="mt-2 space-y-1 text-xs">
-            <li v-for="diff in applied.diffs" :key="diff.field" class="flex flex-wrap items-center gap-2">
-              <span class="w-12 shrink-0 text-muted">{{ fieldLabel(diff.field) }}</span>
-              <span class="min-w-0 max-w-[8rem] truncate line-through opacity-60">
-                {{ diff.old_value ?? '∅' }}
-              </span>
-              <span class="shrink-0 text-muted">→</span>
-              <span class="min-w-0 max-w-[10rem] truncate text-success">{{ diff.new_value ?? '∅' }}</span>
-            </li>
-          </ul>
-          <p v-else class="mt-2 text-xs text-muted">标签与原有值一致，未做改动。</p>
-
-          <p class="mt-2 text-xs text-muted">
-            封面：{{ applied.cover_applied ? '已写入' : '未写入' }} · 歌词：{{
-              applied.lyrics_applied ? '已写入' : '未写入'
-            }}
-          </p>
-
-          <div class="mt-3 flex flex-wrap gap-2">
+        <div v-if="applied" class="mt-3 lg:hidden">
+          <div class="rounded-control border border-success/40 bg-success/5 px-3 py-2">
+            <p class="text-xs text-success">
+              已写入 {{ applied.diffs.length }} 项改动（完整回执见上方）
+            </p>
             <button
               type="button"
-              class="rounded-control bg-brand px-3.5 py-1.5 text-sm font-medium text-bg transition-colors hover:bg-brand-600"
+              class="mt-2 w-full rounded-control bg-brand px-3 py-1.5 text-sm font-medium text-bg transition-colors hover:bg-brand-600"
               @click="backToLibrary"
             >
               返回资源库（已定位到这首）
-            </button>
-            <button
-              type="button"
-              class="rounded-control border border-border px-3.5 py-1.5 text-sm text-muted transition-colors hover:text-text"
-              @click="resetResult"
-            >
-              继续匹配其他候选
             </button>
           </div>
         </div>
       </div>
     </div>
+
   </section>
 </template>
