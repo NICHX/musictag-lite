@@ -12,6 +12,7 @@ dependencies = [
     "alembic>=1.13",
     "httpx>=0.27",
     "mutagen>=1.47",
+    "opencc-python-reimplemented>=0.1.7",
     "python-multipart>=0.0.9",
     "pyyaml>=6.0",
 ]

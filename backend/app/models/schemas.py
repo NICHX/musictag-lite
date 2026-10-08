@@ -30,7 +30,7 @@ SortField = Literal[
     "filename", "path", "size", "mtime", "duration", "track_no", "title", "artist", "album"
 ]
 SortOrder = Literal["asc", "desc"]
-BatchOpKind = Literal["set", "fill_empty", "append", "replace"]
+BatchOpKind = Literal["set", "fill_empty", "append", "replace", "zh_convert"]
 BatchSource = Literal["manual", "batch", "scrape"]
 
 
@@ -167,6 +167,9 @@ class BatchEditOp(BaseModel):
     find: str | None = Field(default=None, description="replace 策略的查找串")
     replace: str | None = Field(default=None, description="replace 策略的替换串")
     use_regex: bool = False
+    direction: Literal["s2t", "t2s"] | None = Field(
+        default=None, description="zh_convert 策略的转换方向：s2t 简→繁，t2s 繁→简"
+    )
 
 
 class BatchEditRequest(BaseModel):

@@ -12,7 +12,7 @@ from app.audio.base import AudioIO, TagSet
 from app.audio.mutagen_io import audio_io
 from app.models.db import LogResult, LogSource, TagStatus, Track, utcnow
 from app.models.schemas import BatchEditOp
-from app.services import oplog
+from app.services import oplog, zh_convert
 
 # 可编辑字段（与 schemas.EDITABLE_FIELDS 对应）
 EDITABLE_FIELDS: tuple[str, ...] = (
@@ -65,6 +65,7 @@ def apply_batch_ops(
 
     - ``set``  + strategy：overwrite 覆盖 / fill_empty 仅填空 / append 追加
     - ``replace``：按 find→replace 做普通或正则替换
+    - ``zh_convert``：按 direction 做简繁转换（F13）
     - ``fill_empty``：仅当当前为空时写入
     """
     result = dict(current)
@@ -90,6 +91,11 @@ def apply_batch_ops(
                 continue
             text = _as_text(old)
             result[field] = re.sub(find, repl, text) if op.use_regex else text.replace(find, repl)
+
+        elif op.op == "zh_convert":
+            if old in (None, "") or op.direction is None:
+                continue
+            result[field] = zh_convert.convert(_as_text(old), op.direction)
 
         elif op.op == "fill_empty" and old in (None, ""):
             result[field] = op.value

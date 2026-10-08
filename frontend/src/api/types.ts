@@ -128,11 +128,12 @@ export interface BatchPreviewResponse {
 
 export interface BatchEditOp {
   field: string
-  op: 'set' | 'fill_empty' | 'append' | 'replace'
+  op: 'set' | 'fill_empty' | 'append' | 'replace' | 'zh_convert'
   value?: unknown
   find?: string | null
   replace?: string | null
   use_regex?: boolean
+  direction?: 's2t' | 't2s' | null
 }
 
 export interface BatchEditRequest {

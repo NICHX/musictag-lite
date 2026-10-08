@@ -19,12 +19,21 @@ const FIELDS = [
   { key: 'comment', label: '注释' },
 ]
 
+const ZH_FIELDS = [
+  { key: 'artist', label: '艺术家' },
+  { key: 'album', label: '专辑' },
+  { key: 'title', label: '标题' },
+  { key: 'album_artist', label: '专辑艺术家' },
+]
+
 const field = ref('album')
-const strategy = ref<'overwrite' | 'fill_empty' | 'append' | 'replace'>('overwrite')
+const strategy = ref<'overwrite' | 'fill_empty' | 'append' | 'replace' | 'zh_convert'>('overwrite')
 const value = ref('')
 const find = ref('')
 const replace = ref('')
 const useRegex = ref(false)
+const direction = ref<'s2t' | 't2s'>('t2s')
+const zhFields = ref<string[]>(['artist', 'album'])
 const preview = ref<string | null>(null)
 const busy = ref(false)
 const error = ref<string | null>(null)
@@ -33,10 +42,27 @@ function buildOps(): BatchEditOp[] {
   if (strategy.value === 'replace') {
     return [{ field: field.value, op: 'replace', find: find.value, replace: replace.value, use_regex: useRegex.value }]
   }
+  if (strategy.value === 'zh_convert') {
+    return zhFields.value.map((key) => ({ field: key, op: 'zh_convert', direction: direction.value }))
+  }
   return [{ field: field.value, op: 'set', value: value.value }]
 }
 
+function validate(): boolean {
+  if (strategy.value === 'zh_convert' && zhFields.value.length === 0) {
+    error.value = '请至少选择一个转换字段'
+    return false
+  }
+  return true
+}
+
+/** strategy 仅对 set 有意义；zh_convert / replace 走各自的 op。 */
+function effectiveStrategy(): 'overwrite' | 'fill_empty' | 'append' | 'replace' {
+  return strategy.value === 'zh_convert' ? 'overwrite' : strategy.value
+}
+
 async function runPreview(): Promise<void> {
+  if (!validate()) return
   busy.value = true
   error.value = null
   preview.value = null
@@ -44,7 +70,7 @@ async function runPreview(): Promise<void> {
     const result = await trackApi.batchPreview({
       ids: props.ids,
       ops: buildOps(),
-      strategy: strategy.value,
+      strategy: effectiveStrategy(),
     })
     preview.value = `将修改 ${result.changed} / 共 ${result.total} 首`
   } catch (e) {
@@ -55,11 +81,12 @@ async function runPreview(): Promise<void> {
 }
 
 async function apply(): Promise<void> {
+  if (!validate()) return
   busy.value = true
   error.value = null
   preview.value = null
   try {
-    await trackApi.batchApply({ ids: props.ids, ops: buildOps(), strategy: strategy.value })
+    await trackApi.batchApply({ ids: props.ids, ops: buildOps(), strategy: effectiveStrategy() })
     emit('done')
     emit('clear')
   } catch (e) {
@@ -78,6 +105,7 @@ async function apply(): Promise<void> {
       </span>
 
       <select
+        v-if="strategy !== 'zh_convert'"
         v-model="field"
         class="rounded-control border border-border bg-bg px-2 py-1 text-xs text-text outline-none focus:border-brand"
         aria-label="目标字段"
@@ -94,6 +122,7 @@ async function apply(): Promise<void> {
         <option value="fill_empty">仅填空</option>
         <option value="append">追加</option>
         <option value="replace">查找替换</option>
+        <option value="zh_convert">简繁转换</option>
       </select>
 
       <template v-if="strategy === 'replace'">
@@ -111,6 +140,24 @@ async function apply(): Promise<void> {
           <input v-model="useRegex" type="checkbox" /> 正则
         </label>
       </template>
+
+      <template v-else-if="strategy === 'zh_convert'">
+        <select
+          v-model="direction"
+          class="rounded-control border border-border bg-bg px-2 py-1 text-xs text-text outline-none focus:border-brand"
+          aria-label="转换方向"
+        >
+          <option value="t2s">繁 → 简</option>
+          <option value="s2t">简 → 繁</option>
+        </select>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+          <label v-for="item in ZH_FIELDS" :key="item.key" class="flex items-center gap-1">
+            <input v-model="zhFields" type="checkbox" :value="item.key" />
+            {{ item.label }}
+          </label>
+        </div>
+      </template>
+
       <input
         v-else
         v-model="value"
