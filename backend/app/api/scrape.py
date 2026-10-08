@@ -41,7 +41,7 @@ async def search(
     if payload.track_id is not None:
         track = get_track_or_404(session, payload.track_id)
         ensure_track_path(session, track)
-        query = scrape_orchestrator.build_query(track)
+        query = scrape_orchestrator.build_query(track, scrape_orchestrator.known_artists(session))
     elif payload.query is not None:
         query = ScrapeQuery(**payload.query.model_dump())
     else:
@@ -120,7 +120,9 @@ async def create_job(payload: ScrapeJobCreateRequest) -> TaskAccepted:
                 with session_scope() as session:
                     track = session.get(Track, track_id)
                     if track is not None:
-                        query = scrape_orchestrator.build_query(track)
+                        query = scrape_orchestrator.build_query(
+                            track, scrape_orchestrator.known_artists(session)
+                        )
                         candidates = await scrape_orchestrator.search(
                             session, query, providers=payload.providers, limit=5
                         )

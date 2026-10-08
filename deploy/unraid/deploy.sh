@@ -94,9 +94,27 @@ ssh "${SSH_OPTS[@]}" "$NAS_HOST" "
   echo '    已清理'
 "
 
-# ---------- 4) 构建并启动 ----------
+# ---------- 4) 构建并启动（并清理上一次构建留下的孤立镜像） ----------
 echo "==> 构建并启动（首次构建约 1-2 分钟）"
-ssh "${SSH_OPTS[@]}" "$NAS_HOST" "cd '$STACK_DIR' && docker compose up -d --build && docker compose ps"
+ssh "${SSH_OPTS[@]}" "$NAS_HOST" "
+  OLD_IMAGE=\$(docker images -q '$STACK_NAME:latest' | head -n1)
+  cd '$STACK_DIR' && docker compose up -d --build && docker compose ps
+
+  # 1) 精确清理上一次的同名镜像（重建后它会变成 <none> 悬空镜像）
+  NEW_IMAGE=\$(docker images -q '$STACK_NAME:latest' | head -n1)
+  if [ -n \"\$OLD_IMAGE\" ] && [ \"\$OLD_IMAGE\" != \"\$NEW_IMAGE\" ]; then
+    docker rmi \"\$OLD_IMAGE\" >/dev/null 2>&1 && echo \"    已移除旧镜像 \${OLD_IMAGE:0:12}\"
+  fi
+
+  # 2) 再清一次历史遗留的悬空（孤立）镜像
+  DANGLING=\$(docker images -q --filter dangling=true | wc -l | tr -d ' ')
+  if [ \"\$DANGLING\" != \"0\" ]; then
+    docker image prune -f >/dev/null 2>&1 && echo \"    已清理 \$DANGLING 个孤立镜像\"
+  fi
+
+  echo '    当前镜像:'
+  docker images '$STACK_NAME' --format '      {{.Repository}}:{{.Tag}}  {{.ID}}  {{.Size}}  {{.CreatedSince}}'
+"
 
 # ---------- 5) 健康检查（探测失败不影响部署结果判定） ----------
 echo "==> 等待健康检查"

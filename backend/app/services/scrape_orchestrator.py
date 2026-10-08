@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from app.models.db import ProviderConfig, Track
 from app.providers.base import AlbumBundle, Candidate, CoverBytes, ScrapeQuery
 from app.providers.registry import ProviderRegistry, provider_registry
 from app.services.cover_service import CoverService
+from app.services.filename_parser import parse_filename
 from app.services.lyrics_service import LyricsService
 from app.services.tag_service import SOURCE_SCRAPE, TagService
 
@@ -77,6 +79,8 @@ class ScrapeOrchestrator:
         self.registry = registry or provider_registry
         self._settings = get_settings()
         self._client: httpx.AsyncClient | None = None
+        self._artists_cache: set[str] = set()
+        self._artists_at: float = 0.0
 
     # ---- 网络客户端 ----
     def client(self) -> httpx.AsyncClient:
@@ -103,16 +107,31 @@ class ScrapeOrchestrator:
             self._client = None
 
     # ---- 查询 ----
+    def known_artists(self, session: Session | None, *, ttl: float = 60.0) -> set[str]:
+        """曲库中已标注过的艺术家（小写集合），用于消解文件名「A - B」的顺序歧义。"""
+        if session is None:
+            return set()
+        now = time.monotonic()
+        if self._artists_cache and now - self._artists_at < ttl:
+            return self._artists_cache
+        rows = session.exec(select(Track.artist).where(Track.artist.is_not(None)).distinct()).all()
+        self._artists_cache = {
+            str(name).strip().casefold() for name in rows if name and str(name).strip()
+        }
+        self._artists_at = now
+        return self._artists_cache
+
     @staticmethod
-    def build_query(track: Track) -> ScrapeQuery:
-        """构造查询：优先已有标签，兜底解析文件名。"""
+    def build_query(track: Track, known_artists: set[str] | None = None) -> ScrapeQuery:
+        """构造查询：优先已有标签，缺失字段用文件名解析补全（§9.4）。"""
         stem = Path(track.filename).stem
         hint = _FILENAME_NOISE.sub("", stem).strip() or stem
+        parsed = parse_filename(track.filename, known_artists)
         return ScrapeQuery(
-            title=track.title,
-            artist=track.artist,
-            album=track.album,
-            track_no=track.track_no,
+            title=track.title or parsed.title,
+            artist=track.artist or parsed.artist,
+            album=track.album or parsed.album,
+            track_no=track.track_no or parsed.track_no,
             duration=int(track.duration) if track.duration else None,
             filename_hint=hint,
         )
@@ -291,7 +310,7 @@ class ScrapeOrchestrator:
         return None
 
     async def _fetch_lyrics(self, session: Session | None, track: Track) -> str | None:
-        query = self.build_query(track)
+        query = self.build_query(track, self.known_artists(session))
         for provider in self.select_providers(session, "lyrics"):
             try:
                 lyrics = await provider.fetch_lyrics(query)

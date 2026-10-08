@@ -91,7 +91,13 @@ class MusicBrainzProvider(HTTPProvider):
     def _build_queries(cls, q: ScrapeQuery) -> list[str]:
         """主查询：有标签按标签；无标签则用文件名。"""
         if q.title:
-            return [cls._fielded(q.title, q.artist, q.album)]
+            queries = [cls._fielded(q.title, q.artist, q.album)]
+            # 多艺术家（"A,B"）时补一条只用首位艺术家的查询作为兜底
+            if q.artist and "," in q.artist:
+                first = q.artist.split(",")[0].strip()
+                if first:
+                    queries.append(cls._fielded(q.title, first, q.album))
+            return queries
         return cls._filename_queries(q)
 
     @classmethod
