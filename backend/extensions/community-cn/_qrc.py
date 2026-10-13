@@ -26,28 +26,48 @@ def _is_latin(ch: str) -> bool:
     return ch.isascii() and ch.isalnum()
 
 
-def parse_qrc(content: str) -> list[dict[str, Any]]:
-    """解析为与 ``_krc`` 一致的逐行逐字结构（``offset`` 为相对行首毫秒）。
+def _normalize_words(raw: list[tuple[str, int, int]], start: int) -> list[dict[str, Any]]:
+    """把 ``[(text, 起点ms, 时长ms)]`` 规整为逐字结构。
 
-    归一化：去掉每段的首尾空白并**丢弃纯空白段**（部分 QRC 会把每个字之间的空格
-    也当作一段，导致「一个字一个空格」）；仅在两个拉丁词之间补一个空格，避免英文粘连。
+    平台常在**每个字之间**插入一个独立空格段作为分词/分隔符（其渲染器不显示），
+    但**稀疏的空格是真实歌词内容**（如「坚持 经已」）。因此：
+
+    - 若该行几乎每个字之间都有空格段 → 视为分隔符：去掉空格段，仅在两个拉丁词之间补空格；
+    - 否则 → 原样保留（空格段作为内容），不做增删。
     """
+    content = [(text.strip(), ms, dur) for text, ms, dur in raw if text.strip()]
+    blanks = len(raw) - len(content)
+    dense = blanks > 0 and blanks >= max(1, len(content) - 1)
+
+    if dense:
+        words: list[dict[str, Any]] = []
+        for index, (token, ms, dur) in enumerate(content):
+            if index > 0 and _is_latin(content[index - 1][0][-1]) and _is_latin(token[0]):
+                words.append({"offset": ms - start, "duration": 0, "text": " "})
+            words.append({"offset": ms - start, "duration": dur, "text": token})
+        return words
+
+    words = []
+    for text, ms, dur in raw:
+        token = text if text.strip() else " "
+        if token:
+            words.append({"offset": ms - start, "duration": dur, "text": token})
+    return words
+
+
+def parse_qrc(content: str) -> list[dict[str, Any]]:
+    """解析为与 ``_krc`` 一致的逐行逐字结构（``offset`` 为相对行首毫秒）。"""
     lines: list[dict[str, Any]] = []
     for raw in content.splitlines():
         match = _LINE.match(raw.strip())
         if not match:
             continue
         start, duration = int(match.group(1)), int(match.group(2))
-        tokens = [
-            (text.strip(), int(w_start), int(w_duration))
+        raw_tokens = [
+            (text, int(w_start), int(w_duration))
             for text, w_start, w_duration in _WORD.findall(match.group(3))
         ]
-        tokens = [t for t in tokens if t[0]]
-        words: list[dict[str, Any]] = []
-        for index, (token, w_start, w_duration) in enumerate(tokens):
-            if index > 0 and _is_latin(tokens[index - 1][0][-1]) and _is_latin(token[0]):
-                words.append({"offset": w_start - start, "duration": 0, "text": " "})
-            words.append({"offset": w_start - start, "duration": w_duration, "text": token})
+        words = _normalize_words(raw_tokens, start)
         if words:
             lines.append(
                 {

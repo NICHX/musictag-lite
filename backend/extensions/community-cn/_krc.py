@@ -40,28 +40,45 @@ def _is_latin(ch: str) -> bool:
     return ch.isascii() and ch.isalnum()
 
 
-def parse_krc(text: str) -> list[dict[str, Any]]:
-    """解析为逐行逐字结构：``[{start, duration, text, words:[{offset,duration,text}]}]``。
+def _normalize_words(raw: list[tuple[str, int, int]], start: int) -> list[dict[str, Any]]:
+    """把 ``[(text, 起点ms, 时长ms)]`` 规整为逐字结构（``start`` 为行起点，用于换算相对偏移）。
 
-    归一化：去掉每段首尾空白并**丢弃纯空白段**（避免「一个字一个空格」）；
-    仅在两个拉丁词之间补一个空格，避免英文粘连。
+    平台常在**每个字之间**插入一个独立空格段作为分词/分隔符；但**稀疏空格是真实内容**。因此：
+    仅当该行几乎每个字之间都有空格段时，才把它们当分隔符去掉（拉丁词间补空格）；否则原样保留。
     """
+    content = [(text.strip(), ms, dur) for text, ms, dur in raw if text.strip()]
+    blanks = len(raw) - len(content)
+    dense = blanks > 0 and blanks >= max(1, len(content) - 1)
+
+    if dense:
+        words: list[dict[str, Any]] = []
+        for index, (token, ms, dur) in enumerate(content):
+            if index > 0 and _is_latin(content[index - 1][0][-1]) and _is_latin(token[0]):
+                words.append({"offset": ms - start, "duration": 0, "text": " "})
+            words.append({"offset": ms - start, "duration": dur, "text": token})
+        return words
+
+    words = []
+    for text, ms, dur in raw:
+        token = text if text.strip() else " "
+        if token:
+            words.append({"offset": ms - start, "duration": dur, "text": token})
+    return words
+
+
+def parse_krc(text: str) -> list[dict[str, Any]]:
+    """解析为逐行逐字结构：``[{start, duration, text, words:[{offset,duration,text}]}]``。"""
     lines: list[dict[str, Any]] = []
     for raw in text.splitlines():
         line = raw.strip()
         match = _WORD_LINE.match(line)
         if match:
             start, duration, body = int(match.group(1)), int(match.group(2)), match.group(3)
-            tokens = [
-                (chunk.strip(), int(offset), int(word_duration))
+            raw_tokens = [
+                (chunk, int(offset), int(word_duration))
                 for offset, word_duration, chunk in _WORD.findall(body)
             ]
-            tokens = [t for t in tokens if t[0]]
-            words: list[dict[str, Any]] = []
-            for index, (token, offset, word_duration) in enumerate(tokens):
-                if index > 0 and _is_latin(tokens[index - 1][0][-1]) and _is_latin(token[0]):
-                    words.append({"offset": offset, "duration": 0, "text": " "})
-                words.append({"offset": offset, "duration": word_duration, "text": token})
+            words = _normalize_words(raw_tokens, 0)  # KRC 字偏移已是相对行首
             if words:
                 lines.append(
                     {
