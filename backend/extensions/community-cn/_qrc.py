@@ -22,11 +22,15 @@ def extract_qrc(xml_text: str) -> str:
     return html.unescape(match.group(1)) if match else xml_text
 
 
+def _is_latin(ch: str) -> bool:
+    return ch.isascii() and ch.isalnum()
+
+
 def parse_qrc(content: str) -> list[dict[str, Any]]:
     """解析为与 ``_krc`` 一致的逐行逐字结构（``offset`` 为相对行首毫秒）。
 
-    部分 QRC 的每段文本带尾随空格（如 ``无 (0,500)论 (500,500)``），会导致「一个字一个空格」，
-    这里对每段做归一化：去首尾空白；纯空白段保留为单个空格（英文分词用）。
+    归一化：去掉每段的首尾空白并**丢弃纯空白段**（部分 QRC 会把每个字之间的空格
+    也当作一段，导致「一个字一个空格」）；仅在两个拉丁词之间补一个空格，避免英文粘连。
     """
     lines: list[dict[str, Any]] = []
     for raw in content.splitlines():
@@ -34,17 +38,16 @@ def parse_qrc(content: str) -> list[dict[str, Any]]:
         if not match:
             continue
         start, duration = int(match.group(1)), int(match.group(2))
+        tokens = [
+            (text.strip(), int(w_start), int(w_duration))
+            for text, w_start, w_duration in _WORD.findall(match.group(3))
+        ]
+        tokens = [t for t in tokens if t[0]]
         words: list[dict[str, Any]] = []
-        for text, w_start, w_duration in _WORD.findall(match.group(3)):
-            token = text.strip()
-            if token:
-                words.append(
-                    {"offset": int(w_start) - start, "duration": int(w_duration), "text": token}
-                )
-            elif text:
-                words.append(
-                    {"offset": int(w_start) - start, "duration": int(w_duration), "text": " "}
-                )
+        for index, (token, w_start, w_duration) in enumerate(tokens):
+            if index > 0 and _is_latin(tokens[index - 1][0][-1]) and _is_latin(token[0]):
+                words.append({"offset": w_start - start, "duration": 0, "text": " "})
+            words.append({"offset": w_start - start, "duration": w_duration, "text": token})
         if words:
             lines.append(
                 {

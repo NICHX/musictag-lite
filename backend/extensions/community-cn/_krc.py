@@ -36,10 +36,15 @@ def decrypt_krc(data: bytes) -> str:
     return plain.decode("utf-8", errors="replace")
 
 
+def _is_latin(ch: str) -> bool:
+    return ch.isascii() and ch.isalnum()
+
+
 def parse_krc(text: str) -> list[dict[str, Any]]:
     """解析为逐行逐字结构：``[{start, duration, text, words:[{offset,duration,text}]}]``。
 
-    每段文本做归一化（去首尾空白；纯空白段保留为单个空格），避免出现「一个字一个空格」。
+    归一化：去掉每段首尾空白并**丢弃纯空白段**（避免「一个字一个空格」）；
+    仅在两个拉丁词之间补一个空格，避免英文粘连。
     """
     lines: list[dict[str, Any]] = []
     for raw in text.splitlines():
@@ -47,17 +52,16 @@ def parse_krc(text: str) -> list[dict[str, Any]]:
         match = _WORD_LINE.match(line)
         if match:
             start, duration, body = int(match.group(1)), int(match.group(2)), match.group(3)
+            tokens = [
+                (chunk.strip(), int(offset), int(word_duration))
+                for offset, word_duration, chunk in _WORD.findall(body)
+            ]
+            tokens = [t for t in tokens if t[0]]
             words: list[dict[str, Any]] = []
-            for offset, word_duration, chunk in _WORD.findall(body):
-                token = chunk.strip()
-                if token:
-                    words.append(
-                        {"offset": int(offset), "duration": int(word_duration), "text": token}
-                    )
-                elif chunk:
-                    words.append(
-                        {"offset": int(offset), "duration": int(word_duration), "text": " "}
-                    )
+            for index, (token, offset, word_duration) in enumerate(tokens):
+                if index > 0 and _is_latin(tokens[index - 1][0][-1]) and _is_latin(token[0]):
+                    words.append({"offset": offset, "duration": 0, "text": " "})
+                words.append({"offset": offset, "duration": word_duration, "text": token})
             if words:
                 lines.append(
                     {

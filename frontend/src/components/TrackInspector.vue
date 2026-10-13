@@ -657,7 +657,7 @@ watch(
                 <span
                   v-for="(word, j) in line.words"
                   :key="j"
-                  class="rounded px-0.5 hover:bg-surface-2"
+                  class="rounded hover:bg-surface-2"
                   :title="`+${word.offset}ms · ${word.duration}ms`"
                   >{{ word.text }}</span
                 >
