@@ -57,6 +57,14 @@ def _candidate_read(item: Candidate) -> CandidateRead:
     )
 
 
+def _provider_label(key: str | None) -> str:
+    """Provider key → 展示名（未知 key 原样返回）。"""
+    if not key:
+        return ""
+    provider = scrape_orchestrator.registry.get(key)
+    return getattr(provider, "name", None) or key
+
+
 async def _fingerprint_fallback(session: Session, track: Track) -> list[Candidate]:
     """F16 兜底：标签/文件名都无命中时用指纹识别（需 fpcalc + Key + 已启用该源）。"""
     if not fpcalc_available() or not acoustid_config.resolve(session).available:
@@ -159,10 +167,12 @@ async def word_lyrics(
                 lines=[WordLyricLine(**line) for line in lines],
             )
     source, lines = await scrape_orchestrator.word_lyrics(session, track)
+    word_sources = [provider.key for provider in scrape_orchestrator.word_lyrics_providers(session)]
     return WordLyricsResponse(
         track_id=track_id,
         available=bool(lines),
         source=source or None,
+        word_sources=word_sources,
         lines=[WordLyricLine(**line) for line in lines],
     )
 
@@ -250,8 +260,10 @@ async def apply(
         cover_applied=result["cover_applied"],
         lyrics_applied=result["lyrics_applied"],
         lyrics_found=result["lyrics_found"],
+        lyrics_source=result["lyrics_source"],
         word_found=result["word_found"],
         word_written=result["word_written"],
+        word_lyrics_source=result["word_lyrics_source"],
         diffs=[FieldDiff(**item) for item in result["diffs"]],
     )
 
@@ -303,15 +315,21 @@ async def create_job(payload: ScrapeJobCreateRequest) -> TaskAccepted:
                         )
                         applied += 1
                         fields = "、".join(result["applied_fields"]) or "无字段变更"
-                        extra = (
-                            f" · 歌词{'✓' if result['lyrics_applied'] else '×'}"
-                            + (f" · 逐字{'✓' if result['word_found'] else '×'}" if payload.write_word_lyrics else "")
-                            + (" · 逐字已写入" if result["word_written"] else "")
-                        )
-                        await ctx.advance(
-                            current=label,
-                            message=f"✓ {label} · {round(top.score * 100)} 分 · {fields}{extra}",
-                        )
+                        lyrics_src = _provider_label(result["lyrics_source"])
+                        word_src = _provider_label(result["word_lyrics_source"])
+                        summary = [
+                            f"✓ {label}",
+                            f"{round(top.score * 100)} 分",
+                            fields,
+                            f"歌词{'✓' if result['lyrics_found'] else '×'}"
+                            + (f"（{lyrics_src}）" if lyrics_src else ""),
+                        ]
+                        if payload.write_word_lyrics:
+                            summary.append(
+                                f"逐字{'✓' if result['word_found'] else '×'}"
+                                + (f"（{word_src}）" if word_src else "")
+                            )
+                        await ctx.advance(current=label, message=" · ".join(summary))
                     elif top is not None:
                         await ctx.advance(
                             current=label,

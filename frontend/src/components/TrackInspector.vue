@@ -274,6 +274,9 @@ async function toggleWordLyrics(): Promise<void> {
     wordSource.value = result.source
     if (result.available) {
       wordLyrics.value = result.lines
+    } else if (result.word_sources?.length) {
+      // 已启用支持逐字的源，只是这首歌没匹配到——避免误导用户去重复启用
+      error.value = '未找到逐字歌词（已启用的歌词源未匹配到）'
     } else {
       error.value = '未找到逐字歌词（需在「设置 → 刮削源」启用支持逐字的源，如酷狗）'
     }

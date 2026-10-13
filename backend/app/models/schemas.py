@@ -260,6 +260,8 @@ class WordLyricsResponse(BaseModel):
     track_id: int
     available: bool = False
     source: str | None = None
+    # 已启用且支持逐字的歌词源 key（用于「未找到」时区分是「未启用」还是「未匹配」）
+    word_sources: list[str] = Field(default_factory=list)
     lines: list[WordLyricLine] = Field(default_factory=list)
 
 
@@ -354,8 +356,11 @@ class ScrapeApplyResponse(BaseModel):
     cover_applied: bool = False
     lyrics_applied: bool = False
     lyrics_found: bool = False
+    # 歌词与逐字歌词的实际来源（Provider key），与元数据候选来源相互独立
+    lyrics_source: str | None = None
     word_found: bool = False
     word_written: bool = False
+    word_lyrics_source: str | None = None
     diffs: list[FieldDiff] = Field(default_factory=list)
 
 

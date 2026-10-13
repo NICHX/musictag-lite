@@ -252,6 +252,8 @@ export interface WordLyricsResponse {
   track_id: number
   available: boolean
   source: string | null
+  /** 已启用且支持逐字的歌词源 key（用于「未找到」时区分「未启用」与「未匹配」） */
+  word_sources: string[]
   lines: WordLyricLine[]
 }
 
@@ -280,10 +282,14 @@ export interface ScrapeApplyResponse {
   lyrics_applied: boolean
   /** 是否取到歌词（逐行，原文/译文合并后） */
   lyrics_found: boolean
+  /** 实际提供歌词的来源（Provider key）；与元数据候选来源相互独立 */
+  lyrics_source: string | null
   /** 是否取到逐字歌词 */
   word_found: boolean
   /** 逐字歌词是否已写入（内嵌 + .lrc/.nilyric 边车） */
   word_written: boolean
+  /** 实际提供逐字歌词的来源（Provider key） */
+  word_lyrics_source: string | null
   diffs: FieldDiff[]
 }
 

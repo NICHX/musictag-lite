@@ -343,11 +343,13 @@ class ScrapeOrchestrator:
             diffs = TagService().apply_single(session, track, values, source=SOURCE_SCRAPE)
 
         # 封面 / 歌词 / 逐字歌词互不依赖，并发拉取可省掉串行的网络往返
-        cover, content, word_bundle = await asyncio.gather(
+        # 注意：歌词与元数据来源相互独立（歌词按 lyrics 能力源顺序抓取，与所选候选无关）
+        cover, lyrics_result, word_bundle = await asyncio.gather(
             self._fetch_cover(bundle) if apply_cover else _none(),
             self._fetch_lyrics(session, track) if apply_lyrics else _none(),
             self.word_lyrics_bundle(session, track) if write_word_lyrics else _none(),
         )
+        content, lyrics_source = lyrics_result if lyrics_result is not None else (None, None)
 
         cover_applied = False
         if cover is not None:
@@ -361,10 +363,12 @@ class ScrapeOrchestrator:
 
         word_found = False
         word_written = False
+        word_source: str | None = None
         if word_bundle is not None:
-            _source, plain, word = word_bundle
+            source_key, plain, word = word_bundle
             word_found = bool(word)
             if word:
+                word_source = source_key or None
                 # 逐字歌词（若数据源歌词含译文，则并入）写「内嵌 + 同名 .nilyric」
                 from app.services.word_lyrics import merge_word_translation
 
@@ -387,8 +391,10 @@ class ScrapeOrchestrator:
             "cover_applied": cover_applied,
             "lyrics_applied": lyrics_applied,
             "lyrics_found": lyrics_found,
+            "lyrics_source": lyrics_source if lyrics_found else None,
             "word_found": word_found,
             "word_written": word_written,
+            "word_lyrics_source": word_source if word_found else None,
         }
 
     # ---- 内部 ----
@@ -497,16 +503,22 @@ class ScrapeOrchestrator:
             return [url, f"{url}-500"]
         return [url]
 
+    def word_lyrics_providers(self, session: Session | None) -> list[Any]:
+        """已启用且支持逐字的歌词源（按生效优先级），供「未找到」时区分原因。"""
+        return [
+            provider
+            for provider in self.select_providers(session, "lyrics")
+            if callable(getattr(provider, "fetch_word_lyrics", None))
+        ]
+
     async def word_lyrics(
         self, session: Session | None, track: Track
     ) -> tuple[str, list[dict[str, Any]]]:
         """逐字歌词（只读预览）：按 Provider 顺序取第一个支持逐字的源。"""
         self.client()
         query = self.build_query(track, self.known_artists(session))
-        for provider in self.select_providers(session, "lyrics"):
+        for provider in self.word_lyrics_providers(session):
             fetch = getattr(provider, "fetch_word_lyrics", None)
-            if not callable(fetch):
-                continue
             try:
                 lines = await fetch(query)
             except Exception as exc:  # noqa: BLE001 - 单源失败不影响其他源
@@ -528,7 +540,13 @@ class ScrapeOrchestrator:
             return source, "", ""
         return source, to_plain_lrc(lines), to_word_lrc(lines)
 
-    async def _fetch_lyrics(self, session: Session | None, track: Track) -> str | None:
+    async def _fetch_lyrics(
+        self, session: Session | None, track: Track
+    ) -> tuple[str | None, str | None]:
+        """返回 ``(歌词文本, 来源)``：按 lyrics 能力源顺序取第一个命中的源。
+
+        来源即实际提供歌词的 Provider key（与元数据候选的来源无关）。
+        """
         query = self.build_query(track, self.known_artists(session))
         for provider in self.select_providers(session, "lyrics"):
             try:
@@ -540,13 +558,14 @@ class ScrapeOrchestrator:
                 )
                 continue
             if lyrics is not None and lyrics.content:
-                return lyrics.content
-        return None
+                return lyrics.content, (lyrics.source or provider.key)
+        return None, None
 
     async def fetch_lyrics_text(self, session: Session | None, track: Track) -> str | None:
         """按启用顺序抓取歌词文本（部分源如网易云/QQ 已含译文，返回双语 LRC）。"""
         self.client()
-        return await self._fetch_lyrics(session, track)
+        content, _source = await self._fetch_lyrics(session, track)
+        return content
 
     async def word_lyrics_final(
         self,

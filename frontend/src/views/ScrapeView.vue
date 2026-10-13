@@ -62,6 +62,21 @@ const error = ref<string | null>(null)
 const brokenCandidates = ref<Set<string>>(new Set())
 const coverVersion = ref(0)
 
+/**
+ * 逐字歌词探测（只读）：命中即可在写入前告知「是否匹配到逐字」及其来源。
+ * 歌词按「设置 → 刮削源」中歌词能力源的启用顺序抓取，与元数据候选来源无关。
+ */
+const wordProbe = ref<{
+  loading: boolean
+  available: boolean
+  source: string | null
+  sources: string[]
+} | null>(null)
+const wordProbeCache = new Map<
+  number,
+  { available: boolean; source: string | null; sources: string[] }
+>()
+
 const selectedFields = ref<Record<string, boolean>>({})
 const applyCover = ref(true)
 /**
@@ -77,10 +92,12 @@ const lastResult = ref<{
   title: string
   fields: string[]
   cover: boolean
-  lyrics: boolean
+  lyricsFound: boolean
+  lyricsSource: string | null
   wordAttempted: boolean
   wordFound: boolean
   wordWritten: boolean
+  wordSource: string | null
 } | null>(null)
 const notice = ref<string | null>(null)
 const batching = ref(false)
@@ -154,12 +171,35 @@ const resultSummary = computed(() => {
   const tagPart = result.fields.length
     ? `标签 ${result.fields.length} 项（${result.fields.map(fieldLabel).join('、')}）`
     : '标签无改动'
-  const flags = [`封面 ${result.cover ? '✓' : '×'}`, `歌词 ${result.lyrics ? '✓' : '×'}`]
+  const flags = [
+    `封面 ${result.cover ? '✓' : '×'}`,
+    `歌词 ${result.lyricsFound ? `✓${sourcePart(result.lyricsSource)}` : '×'}`,
+  ]
   if (result.wordAttempted) {
-    flags.push(`逐字 ${result.wordFound ? '✓' : '×'}`, `逐字写入 ${result.wordWritten ? '✓' : '×'}`)
+    flags.push(
+      `逐字 ${result.wordFound ? `✓${sourcePart(result.wordSource)}` : '×'}`,
+      `逐字写入 ${result.wordWritten ? '✓' : '×'}`,
+    )
   }
   return [tagPart, ...flags].join(' · ')
 })
+
+/** 歌词来源展示名：本地/内嵌伪来源优先，其次 Provider 展示名，未知 key 原样显示。 */
+const SOURCE_LABELS: Record<string, string> = {
+  local: '本地 .nilyric',
+  embedded: '内嵌逐字',
+}
+
+function sourceLabel(key: string | null): string {
+  if (!key) return ''
+  return SOURCE_LABELS[key] ?? providerNames.value[key] ?? key
+}
+
+/** 「（来源名）」片段。 */
+function sourcePart(key: string | null): string {
+  const label = sourceLabel(key)
+  return label ? `（${label}）` : ''
+}
 
 function fieldLabel(key: string): string {
   return PLAN_FIELDS.find((item) => item.key === key)?.label ?? key
@@ -276,7 +316,37 @@ async function goTo(target: number, keepResult = false): Promise<void> {
   resetPlayer()
   syncQueryForm()
   await search()
+  void probeWordLyrics()
 }
+
+/** 探测当前曲目是否有逐字歌词（只读），命中即记录来源，供写入前提示。 */
+async function probeWordLyrics(): Promise<void> {
+  const id = currentId.value
+  wordProbe.value = null
+  if (id == null || !writeWordLyrics.value) return
+  const cached = wordProbeCache.get(id)
+  if (cached) {
+    wordProbe.value = { loading: false, ...cached }
+    return
+  }
+  wordProbe.value = { loading: true, available: false, source: null, sources: [] }
+  try {
+    const result = await scrapeApi.wordLyrics(id)
+    const entry = {
+      available: result.available,
+      source: result.source,
+      sources: result.word_sources ?? [],
+    }
+    wordProbeCache.set(id, entry)
+    if (currentId.value === id) wordProbe.value = { loading: false, ...entry }
+  } catch {
+    if (currentId.value === id) {
+      wordProbe.value = { loading: false, available: false, source: null, sources: [] }
+    }
+  }
+}
+
+watch(lyricsMode, () => void probeWordLyrics())
 
 function goPrev(): void {
   if (index.value > 0) void goTo(index.value - 1)
@@ -489,10 +559,12 @@ async function applyCurrent(advanceToNext: boolean): Promise<void> {
       title: refreshed.title || track.filename,
       fields: result.applied_fields,
       cover: result.cover_applied,
-      lyrics: result.lyrics_applied || result.word_written,
+      lyricsFound: result.lyrics_found,
+      lyricsSource: result.lyrics_source,
       wordAttempted: writeWordLyrics.value,
       wordFound: result.word_found,
       wordWritten: result.word_written,
+      wordSource: result.word_lyrics_source,
     }
     syncQueryForm()
     if (advanceToNext) advance()
@@ -1191,6 +1263,21 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
                       ? '内嵌写入逐行歌词（普通播放器通用）'
                       : '抓取逐字歌词（仅并入数据源译文，不调用 AI）写入内嵌 + 同名 .nilyric'
                 }}
+              </p>
+              <p v-if="writeWordLyrics" class="text-[11px] leading-relaxed">
+                <template v-if="wordProbe?.loading">逐字匹配：检测中…</template>
+                <template v-else-if="wordProbe?.available">
+                  逐字匹配：<span class="text-success">{{ sourceLabel(wordProbe.source) }} ✓</span>
+                </template>
+                <template v-else-if="wordProbe">
+                  <template v-if="wordProbe.sources.length">
+                    逐字匹配：未找到（已启用 {{ wordProbe.sources.map(sourceLabel).join('、') }}，未匹配到逐字）
+                  </template>
+                  <template v-else>逐字匹配：未找到（需启用支持逐字的源，如酷狗）</template>
+                </template>
+              </p>
+              <p class="text-[11px] leading-relaxed text-muted/80">
+                歌词与逐字按「设置 → 刮削源」中的歌词源顺序抓取，可与上方元数据候选来自不同来源。
               </p>
             </div>
 
