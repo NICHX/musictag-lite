@@ -24,6 +24,14 @@ def _database() -> None:
     init_db(create_all=True)
 
 
+@pytest.fixture(autouse=True)
+def _clear_response_cache() -> None:
+    """每个用例前清空刮削响应缓存，避免跨用例命中导致请求计数断言失真。"""
+    from app.core.cache import response_cache
+
+    response_cache().clear()
+
+
 @pytest.fixture(scope="session")
 def client():
     from fastapi.testclient import TestClient

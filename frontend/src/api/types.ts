@@ -47,6 +47,9 @@ export interface Track {
   has_cover: boolean
   cover_mtime: string | null
   has_lyrics: boolean
+  has_embedded_lyrics: boolean
+  has_lyrics_file: boolean
+  has_word_lyrics: boolean
   tag_status: string
   created_at: string
   updated_at: string
@@ -59,6 +62,13 @@ export interface TrackFacets {
   tag_status: Record<string, number>
   has_cover: Record<string, number>
   has_lyrics: Record<string, number>
+  has_word_lyrics: Record<string, number>
+}
+
+/** 当前筛选命中的全部曲目 id（用于「选择全部」跨页批量操作）。 */
+export interface TrackIds {
+  ids: number[]
+  total: number
 }
 
 export interface Provider {
@@ -77,6 +87,8 @@ export interface Task {
   total: number
   processed: number
   message: string | null
+  /** 当前正在处理的条目（仅实时事件携带，REST 列表不含） */
+  current?: string | null
   error: string | null
   started_at: string | null
   finished_at: string | null
@@ -222,6 +234,33 @@ export interface LyricsRead {
   content: string | null
 }
 
+export interface LyricsTranslateResponse {
+  track_id: number
+  target: string
+  content: string
+}
+
+/** 逐字歌词（只读预览，不落盘） */
+export interface WordLyricWord {
+  text: string
+  offset: number
+  duration: number
+}
+
+export interface WordLyricLine {
+  start: number
+  duration: number
+  text: string
+  words: WordLyricWord[]
+}
+
+export interface WordLyricsResponse {
+  track_id: number
+  available: boolean
+  source: string | null
+  lines: WordLyricLine[]
+}
+
 export interface Candidate {
   provider: string
   external_id: string
@@ -245,6 +284,12 @@ export interface ScrapeApplyResponse {
   applied_fields: string[]
   cover_applied: boolean
   lyrics_applied: boolean
+  /** 是否取到歌词（逐行，原文/译文合并后） */
+  lyrics_found: boolean
+  /** 是否取到逐字歌词 */
+  word_found: boolean
+  /** 是否写入了 .lrc / .nilyric 同名歌词文件 */
+  lyrics_files_written: boolean
   diffs: FieldDiff[]
 }
 

@@ -33,6 +33,11 @@ _FILENAME_NOISE = re.compile(r"^\s*\d{1,3}[\s._-]+")
 _TOKEN_RE = re.compile(r"[0-9a-z\u4e00-\u9fff]+")
 
 
+async def _none() -> None:
+    """占位协程：未启用的分支也返回一个 awaitable，便于统一 gather。"""
+    return None
+
+
 def _similarity(left: str | None, right: str | None) -> float:
     if not left or not right:
         return 0.0
@@ -151,19 +156,26 @@ class ScrapeOrchestrator:
         capability: str,
         providers: list[str] | None = None,
     ) -> list[Any]:
-        """按能力与启用状态筛选 Provider（注册表默认值 + DB 覆盖）。"""
+        """按能力与启用状态筛选 Provider，并按**生效优先级**排序。
+
+        优先级 = DB 覆盖值（设置页可自定义）> 注册表默认值；数值越小越先参与。
+        元数据检索与歌词回退都按此顺序执行。
+        """
         configs: dict[str, ProviderConfig] = {}
         if session is not None:
             configs = {c.provider_key: c for c in session.exec(select(ProviderConfig)).all()}
-        chosen: list[Any] = []
+        chosen: list[tuple[int, str, Any]] = []
         for provider in self.registry.by_capability(capability):
             if providers is not None and provider.key not in providers:
                 continue
             config = configs.get(provider.key)
             enabled = config.enabled if config else provider.default_enabled
-            if enabled:
-                chosen.append(provider)
-        return chosen
+            if not enabled:
+                continue
+            priority = config.priority if config else provider.default_priority
+            chosen.append((priority, provider.key, provider))
+        chosen.sort(key=lambda item: (item[0], item[1]))
+        return [provider for _priority, _key, provider in chosen]
 
     async def search(
         self,
@@ -254,14 +266,17 @@ class ScrapeOrchestrator:
         *,
         candidates: list[Candidate] | None = None,
         only_missing: bool = False,
+        fields: list[str] | None = None,
         apply_cover: bool = False,
         apply_lyrics: bool = False,
+        write_lyrics_files: bool = False,
     ) -> dict[str, Any]:
-        """应用选中候选：写标签（可仅补空值）、封面、歌词。
+        """应用选中候选：写标签（可限定字段/仅补空值）、封面、歌词。
 
         ``candidates`` 为用户实际选中的候选；提供时直接以它为准构造 bundle。
         否则回退到按 id 重新 ``fetch()``（注意：同一 recording 存在于多个 release，
         重新 fetch 可能取到不同 release，从而写错专辑/年份或抓不到封面）。
+        ``fields`` 为字段白名单（逐字段勾选）；``None`` 表示写入候选提供的全部字段。
         """
         self.client()
         picked = [item for item in (candidates or []) if item.external_id]
@@ -272,6 +287,9 @@ class ScrapeOrchestrator:
         )
 
         values = self._bundle_to_values(bundle)
+        if fields is not None:
+            allowed = set(fields)
+            values = {key: value for key, value in values.items() if key in allowed}
         if only_missing:
             values = {
                 key: value
@@ -283,32 +301,46 @@ class ScrapeOrchestrator:
         if values:
             diffs = TagService().apply_single(session, track, values, source=SOURCE_SCRAPE)
 
-        cover_applied = False
-        if apply_cover:
-            cover = await self._fetch_cover(bundle)
-            if cover is not None:
-                CoverService().write(
-                    session,
-                    track,
-                    CoverImage(data=cover.data, mime=cover.mime),
-                    source=SOURCE_SCRAPE,
-                )
-                cover_applied = True
+        # 封面 / 歌词 / 逐字歌词互不依赖，并发拉取可省掉串行的网络往返
+        cover, content, word_bundle = await asyncio.gather(
+            self._fetch_cover(bundle) if apply_cover else _none(),
+            self._fetch_lyrics(session, track) if apply_lyrics else _none(),
+            self.word_lyrics_bundle(session, track) if write_lyrics_files else _none(),
+        )
 
+        cover_applied = False
+        if cover is not None:
+            CoverService().write(
+                session,
+                track,
+                CoverImage(data=cover.data, mime=cover.mime),
+                source=SOURCE_SCRAPE,
+            )
+            cover_applied = True
+
+        lyrics_found = bool(content)
         lyrics_applied = False
-        if apply_lyrics:
-            content = await self._fetch_lyrics(session, track)
-            if content:
-                LyricsService().write(
-                    session, track, content, target="embedded", source=SOURCE_SCRAPE
-                )
-                lyrics_applied = True
+        if content:
+            LyricsService().write(session, track, content, target="embedded", source=SOURCE_SCRAPE)
+            lyrics_applied = True
+
+        word_found = False
+        lyrics_files_written = False
+        if word_bundle is not None:
+            _source, plain, word = word_bundle
+            word_found = bool(word)
+            if word:
+                LyricsService().write_word_sidecars(session, track, plain=plain, word=word)
+                lyrics_files_written = True
 
         return {
             "applied_fields": [item["field"] for item in diffs],
             "diffs": diffs,
             "cover_applied": cover_applied,
             "lyrics_applied": lyrics_applied,
+            "lyrics_found": lyrics_found,
+            "word_found": word_found,
+            "lyrics_files_written": lyrics_files_written,
         }
 
     # ---- 内部 ----
@@ -416,6 +448,37 @@ class ScrapeOrchestrator:
         if url.endswith("/front"):
             return [url, f"{url}-500"]
         return [url]
+
+    async def word_lyrics(
+        self, session: Session | None, track: Track
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """逐字歌词（只读预览）：按 Provider 顺序取第一个支持逐字的源。"""
+        self.client()
+        query = self.build_query(track, self.known_artists(session))
+        for provider in self.select_providers(session, "lyrics"):
+            fetch = getattr(provider, "fetch_word_lyrics", None)
+            if not callable(fetch):
+                continue
+            try:
+                lines = await fetch(query)
+            except Exception as exc:  # noqa: BLE001 - 单源失败不影响其他源
+                logger.warning(
+                    "scrape.word_lyrics_failed",
+                    extra={"provider": provider.key, "error": str(exc)},
+                )
+                continue
+            if lines:
+                return provider.key, lines
+        return "", []
+
+    async def word_lyrics_bundle(self, session: Session | None, track: Track) -> tuple[str, str, str]:
+        """逐字歌词 → ``(来源, 逐行 LRC, 逐字 LRC)``（后者为 LDDC / lx-music 格式）。"""
+        from app.providers.community._krc import to_plain_lrc, to_word_lrc
+
+        source, lines = await self.word_lyrics(session, track)
+        if not lines:
+            return source, "", ""
+        return source, to_plain_lrc(lines), to_word_lrc(lines)
 
     async def _fetch_lyrics(self, session: Session | None, track: Track) -> str | None:
         query = self.build_query(track, self.known_artists(session))

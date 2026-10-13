@@ -26,6 +26,7 @@ from app.models.schemas import (
     ParseFilenameResponse,
     TaskAccepted,
     TrackFacets,
+    TrackIds,
     TrackRead,
     TrackUpdate,
 )
@@ -65,6 +66,9 @@ def track_facets(session: Session = Depends(get_session)) -> TrackFacets:
     lyrics_rows = session.exec(
         select(Track.has_lyrics, func.count()).group_by(Track.has_lyrics)
     ).all()
+    word_rows = session.exec(
+        select(Track.has_word_lyrics, func.count()).group_by(Track.has_word_lyrics)
+    ).all()
     return TrackFacets(
         formats=group(Track.format),
         years=group(Track.year),
@@ -72,23 +76,48 @@ def track_facets(session: Session = Depends(get_session)) -> TrackFacets:
         tag_status=group(Track.tag_status),
         has_cover={str(k): int(v) for k, v in cover_rows},
         has_lyrics={str(k): int(v) for k, v in lyrics_rows},
+        has_word_lyrics={str(k): int(v) for k, v in word_rows},
     )
 
 
-@router.get("", response_model=Page[TrackRead])
-def list_tracks(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
-    sort: str = Query("filename"),
-    order: str = Query("asc"),
+@router.get("/ids", response_model=TrackIds)
+def list_track_ids(
     q: str | None = Query(default=None, description="标题/艺术家/专辑/文件名模糊匹配"),
     library_id: int | None = None,
     format: str | None = None,
     tag_status: str | None = None,
     has_cover: bool | None = None,
     has_lyrics: bool | None = None,
+    has_word_lyrics: bool | None = None,
     session: Session = Depends(get_session),
-) -> Page[TrackRead]:
+) -> TrackIds:
+    """返回当前筛选命中的全部曲目 id（不分页），用于跨页「选择全部」批量操作。"""
+    statement = select(Track.id)
+    for condition in _track_filters(
+        q=q,
+        library_id=library_id,
+        format=format,
+        tag_status=tag_status,
+        has_cover=has_cover,
+        has_lyrics=has_lyrics,
+        has_word_lyrics=has_word_lyrics,
+    ):
+        statement = statement.where(condition)
+    ids = [int(row) for row in session.exec(statement).all()]
+    return TrackIds(ids=ids, total=len(ids))
+
+
+def _track_filters(
+    *,
+    q: str | None,
+    library_id: int | None,
+    format: str | None,
+    tag_status: str | None,
+    has_cover: bool | None,
+    has_lyrics: bool | None,
+    has_word_lyrics: bool | None,
+) -> list:
+    """列表与 id 查询共用的筛选条件。"""
     filters = []
     if q:
         like = f"%{q}%"
@@ -110,6 +139,35 @@ def list_tracks(
         filters.append(Track.has_cover == has_cover)
     if has_lyrics is not None:
         filters.append(Track.has_lyrics == has_lyrics)
+    if has_word_lyrics is not None:
+        filters.append(Track.has_word_lyrics == has_word_lyrics)
+    return filters
+
+
+@router.get("", response_model=Page[TrackRead])
+def list_tracks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=1000),
+    sort: str = Query("filename"),
+    order: str = Query("asc"),
+    q: str | None = Query(default=None, description="标题/艺术家/专辑/文件名模糊匹配"),
+    library_id: int | None = None,
+    format: str | None = None,
+    tag_status: str | None = None,
+    has_cover: bool | None = None,
+    has_lyrics: bool | None = None,
+    has_word_lyrics: bool | None = None,
+    session: Session = Depends(get_session),
+) -> Page[TrackRead]:
+    filters = _track_filters(
+        q=q,
+        library_id=library_id,
+        format=format,
+        tag_status=tag_status,
+        has_cover=has_cover,
+        has_lyrics=has_lyrics,
+        has_word_lyrics=has_word_lyrics,
+    )
 
     statement = select(Track)
     count_statement = select(func.count()).select_from(Track)

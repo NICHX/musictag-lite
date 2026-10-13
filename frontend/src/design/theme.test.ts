@@ -13,8 +13,8 @@ describe('主题工具', () => {
 
   it('注入与恢复封面驱动强调色', () => {
     const el = document.createElement('div')
-    setAccent('#ff5a36', el)
-    expect(el.style.getPropertyValue('--accent-dynamic')).toBe('#ff5a36')
+    setAccent('#0891b2', el)
+    expect(el.style.getPropertyValue('--accent-dynamic')).toBe('#0891b2')
     resetAccent(el)
     expect(el.style.getPropertyValue('--accent-dynamic')).toBe('')
   })

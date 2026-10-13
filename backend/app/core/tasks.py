@@ -42,10 +42,12 @@ class TaskContext:
         self._total = total
         await self._manager._emit_progress(self, status=TaskStatus.running)
 
-    async def advance(self, step: int = 1, current: str | None = None) -> None:
-        """推进进度并推送事件。"""
+    async def advance(
+        self, step: int = 1, current: str | None = None, message: str | None = None
+    ) -> None:
+        """推进进度并推送事件（``message`` 会落库，便于事后查看明细）。"""
         self._processed += step
-        await self._manager._emit_progress(self, current=current)
+        await self._manager._emit_progress(self, current=current, message=message)
 
     async def report(self, processed: int, total: int, current: str | None = None) -> None:
         """以绝对数值上报进度（供线程内扫描等场景回调）。"""

@@ -3,14 +3,36 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import CoverBatchDialog from '@/components/CoverBatchDialog.vue'
-import { trackApi } from '@/api/endpoints'
+import { scrapeApi, trackApi } from '@/api/endpoints'
 import type { BatchEditOp } from '@/api/types'
+import { useTaskStore } from '@/stores/tasks'
+import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{ ids: number[] }>()
 const emit = defineEmits<{ clear: []; done: [] }>()
 
 const router = useRouter()
+const tasks = useTaskStore()
+const ui = useUiStore()
 const showCover = ref(false)
+
+/** 批量逐字歌词：后台任务抓取并写入 .lrc + .nilyric 同名歌词文件。 */
+async function fetchWordLyrics(): Promise<void> {
+  busy.value = true
+  error.value = null
+  preview.value = null
+  try {
+    const task = await scrapeApi.wordLyricsBatch(props.ids)
+    preview.value = `已启动批量逐字歌词（任务 #${task.task_id}）`
+    tasks.connect()
+    void tasks.refresh()
+    ui.toggleTaskCenter(true)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '启动失败'
+  } finally {
+    busy.value = false
+  }
+}
 
 const FIELDS = [
   { key: 'title', label: '标题' },
@@ -99,6 +121,15 @@ async function apply(): Promise<void> {
   } finally {
     busy.value = false
   }
+}
+
+/** 把选中的曲目送进匹配工作台（队列化逐首确认）；队列经 URL 传递，故设上限。 */
+function match(): void {
+  if (props.ids.length > 300) {
+    error.value = `批量匹配一次最多 300 首（当前已选 ${props.ids.length} 首），请缩小选择范围`
+    return
+  }
+  void router.push({ name: 'scrape', query: { ids: props.ids.join(',') } })
 }
 </script>
 
@@ -196,6 +227,22 @@ async function apply(): Promise<void> {
         @click="showCover = true"
       >
         封面
+      </button>
+      <button
+        type="button"
+        class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:text-text disabled:opacity-50"
+        :disabled="busy"
+        title="为所选曲目抓取逐字歌词并写入 .lrc + .nilyric 同名歌词文件"
+        @click="fetchWordLyrics"
+      >
+        逐字歌词
+      </button>
+      <button
+        type="button"
+        class="rounded-control border border-brand/50 px-2.5 py-1 text-xs text-brand transition-colors hover:bg-brand/10"
+        @click="match"
+      >
+        批量匹配
       </button>
       <button
         type="button"

@@ -155,6 +155,7 @@ def _apply_document(track: Track, path: Path, stat: os.stat_result, doc: object)
     props = doc.properties  # type: ignore[attr-defined]
     sidecar = find_sidecar_cover(path.parent)
     lrc = path.with_suffix(".lrc")
+    nilyric = path.with_suffix(".nilyric")
 
     track.dirname = str(path.parent)
     track.filename = path.name
@@ -185,7 +186,11 @@ def _apply_document(track: Track, path: Path, stat: os.stat_result, doc: object)
     track.cover_mtime = (
         datetime.fromtimestamp(sidecar.stat().st_mtime, tz=UTC) if sidecar is not None else None
     )
-    track.has_lyrics = bool(tags.lyrics) or lrc.is_file()
+    # 歌词来源分开记录：内嵌标签 vs 同名文件（.lrc / .nilyric）；has_lyrics 为“是否有词”的合并判断
+    track.has_embedded_lyrics = bool(tags.lyrics)
+    track.has_word_lyrics = nilyric.is_file()
+    track.has_lyrics_file = lrc.is_file() or track.has_word_lyrics
+    track.has_lyrics = track.has_embedded_lyrics or track.has_lyrics_file
     track.tag_status = str(compute_tag_status(tags))
     track.updated_at = utcnow()
 

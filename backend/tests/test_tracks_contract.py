@@ -30,8 +30,24 @@ def test_tracks_facets(client) -> None:
     resp = client.get("/api/tracks/facets")
     assert resp.status_code == 200
     body = resp.json()
-    for key in ("formats", "years", "artists", "tag_status", "has_cover", "has_lyrics"):
+    for key in (
+        "formats",
+        "years",
+        "artists",
+        "tag_status",
+        "has_cover",
+        "has_lyrics",
+        "has_word_lyrics",
+    ):
         assert key in body
+
+
+def test_tracks_ids(client) -> None:
+    resp = client.get("/api/tracks/ids", params={"has_cover": "false"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"ids", "total"}
+    assert isinstance(body["ids"], list)
 
 
 def test_track_not_found(client) -> None:

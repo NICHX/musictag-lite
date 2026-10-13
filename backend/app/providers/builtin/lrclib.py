@@ -25,7 +25,9 @@ class LRCLIBProvider(HTTPProvider):
     name = "LRCLIB"
     capabilities = {"lyrics"}
     default_enabled = True
-    default_priority = 30
+    # 仅声明 lyrics 能力，故该优先级只影响「歌词回退顺序」：
+    # 排在社区平台源（网易云/QQ，60+）之后，作为无平台源时的开放兜底。
+    default_priority = 70
 
     async def fetch_lyrics(self, q: ScrapeQuery) -> Lyrics | None:
         title = q.title

@@ -136,6 +136,9 @@ class Track(SQLModel, table=True):
     has_cover: bool = Field(default=False)
     cover_mtime: datetime | None = None
     has_lyrics: bool = Field(default=False)
+    has_embedded_lyrics: bool = Field(default=False)
+    has_lyrics_file: bool = Field(default=False)
+    has_word_lyrics: bool = Field(default=False)
     tag_status: str = Field(default=TagStatus.unknown, index=True)
     scan_hash: str | None = None
 

@@ -10,7 +10,12 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
+from app.core.cache import response_cache
+
 Capability = str  # "metadata" | "cover" | "lyrics" | "fingerprint"
+
+# 超过该体积的响应（多为封面）不入缓存，避免内存膨胀
+_MAX_CACHED_BYTES = 512 * 1024
 
 # 文件名里常见的「A - B」分隔（要求两侧至少一个空白，避免误切 "AC-DC"）
 _FILENAME_SEPARATOR = re.compile(r"\s+-\s+")
@@ -134,6 +139,8 @@ class HTTPProvider:
     min_interval: float = 0.0  # 两次请求的最小间隔（秒），用于限速
     retry_statuses: set[int] = {429, 500, 502, 503, 504}  # 需要退避重试的状态码
     max_retries: int = 3
+    # 每个请求都会附带的头（如部分平台要求的 Referer / UA）；空的键不覆盖共享客户端默认值
+    extra_headers: dict[str, str] = {}
 
     def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
@@ -148,6 +155,12 @@ class HTTPProvider:
         if self._client is None:
             raise RuntimeError(f"Provider {self.key} 尚未绑定 HTTP 客户端")
         return self._client
+
+    def _cache_key(self, url: str, params: dict[str, Any] | None) -> tuple[Any, ...]:
+        """按 Provider 隔离的缓存键（同 URL 在不同源下语义可能不同）。"""
+        if not params:
+            return (self.key, url)
+        return (self.key, url, tuple(sorted((k, str(v)) for k, v in params.items())))
 
     async def _throttle(self) -> None:
         if self.min_interval <= 0:
@@ -164,7 +177,7 @@ class HTTPProvider:
         response: httpx.Response | None = None
         for attempt in range(self.max_retries):
             await self._throttle()
-            response = await self.client.get(url, params=params)
+            response = await self.client.get(url, params=params, headers=self.extra_headers or None)
             if response.status_code not in self.retry_statuses:
                 return response
             if attempt < self.max_retries - 1:
@@ -180,28 +193,43 @@ class HTTPProvider:
         return min(2.0**attempt, 8.0)
 
     async def _get_json(self, url: str, params: dict[str, Any] | None = None) -> Any | None:
-        """GET JSON；404 返回 None，其余非 2xx 抛出。"""
+        """GET JSON（带缓存）；404 返回 None，其余非 2xx 抛出。"""
+        key = self._cache_key(url, params)
+        hit, cached = response_cache().get(key)
+        if hit:
+            return cached
         response = await self._get(url, params)
         if response.status_code == 404:
-            return None
-        response.raise_for_status()
-        return response.json()
+            result: Any | None = None
+        else:
+            response.raise_for_status()
+            result = response.json()
+        response_cache().set(key, result)
+        return result
 
     async def _get_bytes(self, url: str, params: dict[str, Any] | None = None) -> CoverBytes | None:
-        """GET 二进制（用于封面）；404 返回 None。"""
+        """GET 二进制（带缓存，用于封面）；404 返回 None。"""
+        key = self._cache_key(url, params)
+        hit, cached = response_cache().get(key)
+        if hit:
+            return cached
         response = await self._get(url, params)
         if response.status_code == 404:
+            response_cache().set(key, None)
             return None
         response.raise_for_status()
         mime = response.headers.get("content-type", "image/jpeg").split(";")[0].strip()
-        return CoverBytes(data=response.content, mime=mime or "image/jpeg")
+        result = CoverBytes(data=response.content, mime=mime or "image/jpeg")
+        if len(result.data) <= _MAX_CACHED_BYTES:
+            response_cache().set(key, result)
+        return result
 
     async def _post(self, url: str, data: dict[str, Any] | None = None) -> httpx.Response:
         """带限速与退避重试的 POST（表单编码；用于指纹等长参数）。"""
         response: httpx.Response | None = None
         for attempt in range(self.max_retries):
             await self._throttle()
-            response = await self.client.post(url, data=data)
+            response = await self.client.post(url, data=data, headers=self.extra_headers or None)
             if response.status_code not in self.retry_statuses:
                 return response
             if attempt < self.max_retries - 1:
@@ -213,6 +241,23 @@ class HTTPProvider:
         """POST 表单并解析 JSON；404 返回 None。"""
         response = await self._post(url, data=data)
         if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+
+    async def _post_payload(self, url: str, payload: Any) -> Any | None:
+        """POST JSON 请求体并解析 JSON 响应（带限速与退避重试）；404 返回 None。"""
+        response: httpx.Response | None = None
+        for attempt in range(self.max_retries):
+            await self._throttle()
+            response = await self.client.post(
+                url, json=payload, headers=self.extra_headers or None
+            )
+            if response.status_code not in self.retry_statuses:
+                break
+            if attempt < self.max_retries - 1:
+                await asyncio.sleep(self._retry_delay(attempt, response))
+        if response is None or response.status_code == 404:
             return None
         response.raise_for_status()
         return response.json()

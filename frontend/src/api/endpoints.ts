@@ -15,6 +15,7 @@ import type {
   CoverMeta,
   Library,
   LyricsRead,
+  LyricsTranslateResponse,
   OperationLog,
   OrganizeApplyRequest,
   OrganizePreviewResponse,
@@ -30,6 +31,8 @@ import type {
   TaskAccepted,
   Track,
   TrackFacets,
+  TrackIds,
+  WordLyricsResponse,
 } from './types'
 
 export type TrackQuery = {
@@ -43,6 +46,7 @@ export type TrackQuery = {
   tag_status?: string
   has_cover?: boolean
   has_lyrics?: boolean
+  has_word_lyrics?: boolean
 }
 
 export const libraryApi = {
@@ -54,6 +58,8 @@ export const libraryApi = {
 
 export const trackApi = {
   list: (query: TrackQuery = {}) => api.get<Page<Track>>('/tracks', query),
+  /** 当前筛选命中的全部 id（不分页），用于「选择全部」批量操作。 */
+  ids: (query: TrackQuery = {}) => api.get<TrackIds>('/tracks/ids', query),
   get: (id: number) => api.get<Track>(`/tracks/${id}`),
   update: (id: number, values: Record<string, unknown>) => api.patch<Track>(`/tracks/${id}`, values),
   facets: () => api.get<TrackFacets>('/tracks/facets'),
@@ -114,29 +120,72 @@ export const lyricsApi = {
       target,
       validate_lrc: false,
     }),
+  /** AI 歌词翻译：返回「原文 + 译文」双语对照 LRC（不落盘，前端确认后再写入） */
+  translate: (trackId: number, body: { target?: 'zh' | 'en' | 'ja'; content?: string }) =>
+    api.post<LyricsTranslateResponse>(`/tracks/${trackId}/lyrics/translate`, body),
+  /** 逐字歌词 → 逐字 LRC 并写入同名 .lrc（LDDC / lx-music 格式） */
+  saveWordLyrics: (trackId: number) => api.post<LyricsRead>(`/tracks/${trackId}/lyrics/word`),
 }
 
 export const scrapeApi = {
-  search: (body: { track_id?: number; providers?: string[]; limit?: number }) =>
-    api.post<ScrapeSearchResponse>('/scrape/search', body),
+  search: (body: {
+    track_id?: number
+    /** 自定义搜索条件（不传 track_id 时生效）：用于手动检索/已下架歌曲 */
+    query?: {
+      title?: string
+      artist?: string
+      album?: string
+      track_no?: number
+      duration?: number
+      filename_hint?: string
+    }
+    providers?: string[]
+    limit?: number
+  }) => api.post<ScrapeSearchResponse>('/scrape/search', body),
   apply: (body: {
     track_id: number
     candidate_ids: string[]
     /** 选中的候选本身：后端以此为准，避免按 id 重新 fetch 造成 release 漂移 */
     candidates?: Candidate[]
     only_missing?: boolean
+    /** 标签字段白名单（逐字段勾选）；省略=写入候选提供的全部字段 */
+    fields?: string[]
     apply_cover?: boolean
     apply_lyrics?: boolean
+    /** 同时抓取逐字歌词并写入 .lrc + .nilyric 同名歌词文件 */
+    write_lyrics_files?: boolean
   }) => api.post<ScrapeApplyResponse>('/scrape/apply', body),
   list: (candidate: Candidate) => `${candidate.provider}:${candidate.external_id}`,
   /** F14：指纹识别（fpcalc → AcoustID → 回填 MusicBrainz），需已配置 Key */
   fingerprint: (trackId: number) =>
     api.post<ScrapeSearchResponse>('/scrape/fingerprint', { track_id: trackId }),
+  /** 批量刮削：对每首取最高分候选，达阈值自动应用（仅补空值 + 封面 + 歌词/同名歌词文件） */
+  jobs: (body: {
+    ids: number[]
+    providers?: string[]
+    only_missing?: boolean
+    apply_lyrics?: boolean
+    write_lyrics_files?: boolean
+  }) => api.post<TaskAccepted>('/scrape/jobs', body),
+  /** 逐字歌词（只读预览，不落盘）；优先读本地 .nilyric */
+  wordLyrics: (trackId: number) =>
+    api.get<WordLyricsResponse>(`/scrape/word-lyrics/${trackId}`),
+  /** 批量获取逐字歌词并写入 .lrc + .nilyric 同名歌词文件（后台任务） */
+  wordLyricsBatch: (ids: number[]) =>
+    api.post<TaskAccepted>('/scrape/word-lyrics', { ids }),
 }
 
 export const logsApi = {
-  list: (query: { page?: number; page_size?: number; track_id?: number; source?: string } = {}) =>
-    api.get<Page<OperationLog>>('/logs', query),
+  list: (
+    query: {
+      page?: number
+      page_size?: number
+      track_id?: number
+      source?: string
+      result?: string
+      q?: string
+    } = {},
+  ) => api.get<Page<OperationLog>>('/logs', query),
 }
 
 export const taskApi = {

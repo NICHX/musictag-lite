@@ -11,6 +11,7 @@ interface TaskProgressEvent {
   processed?: number
   total?: number
   current?: string | null
+  message?: string | null
 }
 
 export const useTaskStore = defineStore('tasks', () => {
@@ -48,6 +49,8 @@ export const useTaskStore = defineStore('tasks', () => {
       if (event.status) existing.status = event.status
       if (typeof event.processed === 'number') existing.processed = event.processed
       if (typeof event.total === 'number') existing.total = event.total
+      if (event.current !== undefined) existing.current = event.current
+      if (event.message !== undefined) existing.message = event.message
     } else {
       // 新任务：拉取一次完整列表以补齐字段
       void refresh()

@@ -114,10 +114,12 @@ ssh "${SSH_OPTS[@]}" "$NAS_HOST" "
 "
 
 # ---------- 4) 构建并启动（并清理上一次构建留下的孤立镜像） ----------
-echo "==> 构建并启动（首次构建约 1-2 分钟）"
+echo "==> 构建并启动（首次构建约 1-2 分钟；仅当依赖变化时才重新下载 Python 库）"
 ssh "${SSH_OPTS[@]}" "$NAS_HOST" "
   OLD_IMAGE=\$(docker images -q '$STACK_NAME:latest' | head -n1)
-  cd '$STACK_DIR' && docker compose up -d --build && docker compose ps
+  # DOCKER_BUILDKIT=1：构建缓存存于 BuildKit 缓存区（而不是悬空镜像），
+  # 因此下面的 image prune 不会误删缓存，改源码后只重建变更层、不重新下载依赖。
+  cd '$STACK_DIR' && DOCKER_BUILDKIT=1 docker compose up -d --build && docker compose ps
 
   # 1) 精确清理上一次的同名镜像（重建后它会变成 <none> 悬空镜像）
   NEW_IMAGE=\$(docker images -q '$STACK_NAME:latest' | head -n1)
@@ -125,10 +127,10 @@ ssh "${SSH_OPTS[@]}" "$NAS_HOST" "
     docker rmi \"\$OLD_IMAGE\" >/dev/null 2>&1 && echo \"    已移除旧镜像 \${OLD_IMAGE:0:12}\"
   fi
 
-  # 2) 再清一次历史遗留的悬空（孤立）镜像
-  DANGLING=\$(docker images -q --filter dangling=true | wc -l | tr -d ' ')
+  # 2) 只清理 24 小时前的孤立镜像，避免误删近期构建缓存
+  DANGLING=\$(docker images -q --filter dangling=true --filter until=24h | wc -l | tr -d ' ')
   if [ \"\$DANGLING\" != \"0\" ]; then
-    docker image prune -f >/dev/null 2>&1 && echo \"    已清理 \$DANGLING 个孤立镜像\"
+    docker image prune -f --filter until=24h >/dev/null 2>&1 && echo \"    已清理 \$DANGLING 个陈旧孤立镜像\"
   fi
 
   echo '    当前镜像:'

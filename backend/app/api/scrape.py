@@ -24,10 +24,15 @@ from app.models.schemas import (
     ScrapeSearchRequest,
     ScrapeSearchResponse,
     TaskAccepted,
+    WordLyricLine,
+    WordLyricsBatchRequest,
+    WordLyricsResponse,
 )
 from app.providers.base import Candidate, ScrapeQuery
+from app.providers.community._krc import parse_word_lrc
 from app.services import acoustid_config
 from app.services.fingerprint import FingerprintUnavailable, fpcalc_available
+from app.services.lyrics_service import LyricsService, nilyric_path_for
 from app.services.scrape_orchestrator import scrape_orchestrator
 
 router = APIRouter(prefix="/scrape", tags=["scrape"])
@@ -125,6 +130,69 @@ async def fingerprint(
     )
 
 
+@router.get("/word-lyrics/{track_id}", response_model=WordLyricsResponse)
+async def word_lyrics(
+    track_id: int, session: Session = Depends(get_session)
+) -> WordLyricsResponse:
+    """逐字歌词：优先读本地 ``.nilyric`` 边车，其次联网抓取（酷狗 KRC / QQ QRC）。"""
+    track = get_track_or_404(session, track_id)
+    ensure_track_path(session, track)
+    sidecar = nilyric_path_for(track)
+    if sidecar.is_file():
+        lines = parse_word_lrc(sidecar.read_text(encoding="utf-8", errors="replace"))
+        if lines:
+            return WordLyricsResponse(
+                track_id=track_id,
+                available=True,
+                source="local",
+                lines=[WordLyricLine(**line) for line in lines],
+            )
+    source, lines = await scrape_orchestrator.word_lyrics(session, track)
+    return WordLyricsResponse(
+        track_id=track_id,
+        available=bool(lines),
+        source=source or None,
+        lines=[WordLyricLine(**line) for line in lines],
+    )
+
+
+@router.post("/word-lyrics", response_model=TaskAccepted)
+async def create_word_lyrics_job(payload: WordLyricsBatchRequest) -> TaskAccepted:
+    """批量获取逐字歌词并写入 ``.lrc``（逐行）+ ``.nilyric``（逐字）边车。"""
+
+    async def runner(ctx) -> None:  # noqa: ANN001
+        await ctx.set_total(len(payload.ids))
+        written = 0
+        missing = 0
+        for track_id in payload.ids:
+            label = f"#{track_id}"
+            try:
+                with session_scope() as session:
+                    track = session.get(Track, track_id)
+                    if track is None:
+                        await ctx.advance(message=f"× #{track_id} 不存在")
+                        continue
+                    label = track.title or track.filename
+                    _source, plain, word = await scrape_orchestrator.word_lyrics_bundle(
+                        session, track
+                    )
+                    if word:
+                        LyricsService().write_word_sidecars(session, track, plain=plain, word=word)
+                        written += 1
+                        await ctx.advance(current=label, message=f"✓ {label} · 已写入边车")
+                    else:
+                        missing += 1
+                        await ctx.advance(current=label, message=f"– {label} · 无逐字歌词")
+            except Exception:  # noqa: BLE001 - 单条失败不影响整批
+                missing += 1
+                logger.exception("word_lyrics.item_failed", extra={"track_id": track_id})
+                await ctx.advance(current=label, message=f"× {label} · 处理失败")
+        await ctx.message(f"批量逐字完成：写入 {written} 首，无逐字 {missing} 首")
+
+    task_id = await task_manager.run("word_lyrics", runner, total=len(payload.ids))
+    return TaskAccepted(task_id=task_id)
+
+
 @router.post("/apply", response_model=ScrapeApplyResponse)
 async def apply(
     payload: ScrapeApplyRequest, session: Session = Depends(get_session)
@@ -156,14 +224,19 @@ async def apply(
         ]
         or None,
         only_missing=payload.only_missing,
+        fields=payload.fields,
         apply_cover=payload.apply_cover,
         apply_lyrics=payload.apply_lyrics,
+        write_lyrics_files=payload.write_lyrics_files,
     )
     return ScrapeApplyResponse(
         track_id=track.id,  # type: ignore[arg-type]
         applied_fields=result["applied_fields"],
         cover_applied=result["cover_applied"],
         lyrics_applied=result["lyrics_applied"],
+        lyrics_found=result["lyrics_found"],
+        word_found=result["word_found"],
+        lyrics_files_written=result["lyrics_files_written"],
         diffs=[FieldDiff(**item) for item in result["diffs"]],
     )
 
@@ -187,29 +260,56 @@ async def create_job(payload: ScrapeJobCreateRequest) -> TaskAccepted:
         await ctx.set_total(len(payload.ids))
         applied = 0
         for track_id in payload.ids:
+            label = f"#{track_id}"
             try:
                 with session_scope() as session:
                     track = session.get(Track, track_id)
-                    if track is not None:
-                        query = scrape_orchestrator.build_query(
-                            track, scrape_orchestrator.known_artists(session)
+                    if track is None:
+                        await ctx.advance(message=f"× #{track_id} 不存在")
+                        continue
+                    label = track.title or track.filename
+                    query = scrape_orchestrator.build_query(
+                        track, scrape_orchestrator.known_artists(session)
+                    )
+                    candidates = await scrape_orchestrator.search(
+                        session, query, providers=payload.providers, limit=5
+                    )
+                    top = candidates[0] if candidates else None
+                    if top is not None and top.score >= AUTO_APPLY_THRESHOLD:
+                        result = await scrape_orchestrator.apply(
+                            session,
+                            track,
+                            [top.uid],
+                            candidates=[top],
+                            only_missing=payload.only_missing,
+                            apply_cover=True,
+                            apply_lyrics=payload.apply_lyrics,
+                            write_lyrics_files=payload.write_lyrics_files,
                         )
-                        candidates = await scrape_orchestrator.search(
-                            session, query, providers=payload.providers, limit=5
+                        applied += 1
+                        fields = "、".join(result["applied_fields"]) or "无字段变更"
+                        extra = (
+                            f" · 歌词{'✓' if result['lyrics_applied'] else '×'}"
+                            + (f" · 逐字{'✓' if result['word_found'] else '×'}" if payload.write_lyrics_files else "")
+                            + (" · 文件已写" if result["lyrics_files_written"] else "")
                         )
-                        if candidates and candidates[0].score >= AUTO_APPLY_THRESHOLD:
-                            await scrape_orchestrator.apply(
-                                session,
-                                track,
-                                [candidates[0].uid],
-                                candidates=[candidates[0]],
-                                only_missing=payload.only_missing,
-                                apply_cover=True,
-                            )
-                            applied += 1
+                        await ctx.advance(
+                            current=label,
+                            message=f"✓ {label} · {round(top.score * 100)} 分 · {fields}{extra}",
+                        )
+                    elif top is not None:
+                        await ctx.advance(
+                            current=label,
+                            message=(
+                                f"– {label} · 最高 {round(top.score * 100)} 分，"
+                                f"低于阈值 {round(AUTO_APPLY_THRESHOLD * 100)}，已跳过"
+                            ),
+                        )
+                    else:
+                        await ctx.advance(current=label, message=f"× {label} · 无候选")
             except Exception:  # noqa: BLE001 - 单条失败不影响整批
                 logger.exception("scrape.job.item_failed", extra={"track_id": track_id})
-            await ctx.advance(current=f"track {track_id}")
+                await ctx.advance(current=label, message=f"× {label} · 处理失败")
 
         with session_scope() as session:
             stored = session.get(ScrapeJob, job_id) if job_id is not None else None

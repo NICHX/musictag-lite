@@ -2,19 +2,20 @@
 
 /* ==========================================================================
    品牌设计令牌 —— 对应设计文档 §10.2
-   深色优先、暖色墨底；品牌主色为暖朱橙 Ember；--accent-dynamic 运行时由封面取色注入。
+   深色优先、冷调墨底；品牌主色为青蓝「Midnight Cyan」；
+   --accent-dynamic 运行时由封面取色注入（空值回落到品牌色）。
    禁止：紫粉渐变 / Inter 主字体 / 占位图 / emoji 项目符号。
    ========================================================================== */
 
 :root {
-  --bg: oklch(0.16 0.012 40);
-  --surface: oklch(0.21 0.014 40);
-  --surface-2: oklch(0.25 0.014 40);
-  --border: oklch(0.31 0.012 40);
-  --text: oklch(0.95 0.006 60);
-  --text-muted: oklch(0.72 0.012 50);
-  --brand: #ff5a36;
-  --brand-600: #e8431f;
+  --bg: oklch(0.165 0.016 235);
+  --surface: oklch(0.212 0.018 235);
+  --surface-2: oklch(0.255 0.018 235);
+  --border: oklch(0.325 0.016 235);
+  --text: oklch(0.96 0.005 230);
+  --text-muted: oklch(0.735 0.013 235);
+  --brand: #0891b2;
+  --brand-600: #0e7490;
   --accent-dynamic: var(--brand);
   --success: #3fbf7f;
   --warning: #f5b301;
@@ -23,12 +24,12 @@
 }
 
 [data-theme='light'] {
-  --bg: #faf7f2;
+  --bg: #f4f7f9;
   --surface: #ffffff;
-  --surface-2: #f3ede4;
-  --border: oklch(0.88 0.01 40);
-  --text: oklch(0.24 0.02 40);
-  --text-muted: oklch(0.45 0.015 45);
+  --surface-2: #e9eff3;
+  --border: oklch(0.88 0.008 235);
+  --text: oklch(0.24 0.02 245);
+  --text-muted: oklch(0.46 0.015 245);
   --accent-dynamic: var(--brand);
 }
 

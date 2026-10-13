@@ -89,7 +89,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="mx-auto flex min-h-full w-full max-w-6xl flex-col px-4 py-6 md:px-6">
+  <section class="mx-auto flex min-h-full w-full max-w-[110rem] flex-col px-4 py-6 md:px-6">
     <header>
       <h1 class="font-display text-2xl font-semibold tracking-tight">整理</h1>
       <p class="mt-1 text-sm text-muted">
@@ -245,7 +245,7 @@ onMounted(() => {
                 </td>
                 <td class="px-3 py-2 text-xs text-muted">
                   <span v-if="item.reason" class="text-warning">{{ item.reason }}</span>
-                  <span v-else-if="item.sidecars.length">随带 {{ item.sidecars.length }} 个边车文件</span>
+                  <span v-else-if="item.sidecars.length">随带 {{ item.sidecars.length }} 个同名文件</span>
                   <span v-else>—</span>
                 </td>
               </tr>

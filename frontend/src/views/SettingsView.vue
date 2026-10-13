@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { api } from '@/api/client'
 import { acoustidApi, aiApi } from '@/api/endpoints'
@@ -138,11 +138,41 @@ async function toggleProvider(provider: Provider): Promise<void> {
   }
 }
 
+/** 拖动排序：生效顺序即列表顺序（优先级按 10/20/30… 重新编号）。 */
+const draggingIndex = ref<number | null>(null)
+
+const providerList = computed(() =>
+  [...providers.value].sort((a, b) => a.priority - b.priority || a.key.localeCompare(b.key)),
+)
+
+async function onDrop(targetIndex: number): Promise<void> {
+  const from = draggingIndex.value
+  draggingIndex.value = null
+  if (from === null || from === targetIndex) return
+  const list = [...providerList.value]
+  const [moved] = list.splice(from, 1)
+  list.splice(targetIndex, 0, moved)
+  const before = new Map(providers.value.map((item) => [item.key, item.priority]))
+  const renumbered = list.map((item, index) => ({ ...item, priority: (index + 1) * 10 }))
+  providers.value = renumbered
+  const changed = renumbered.filter((item) => before.get(item.key) !== item.priority)
+  if (!changed.length) return
+  try {
+    await Promise.all(
+      changed.map((item) => api.patch<Provider>(`/providers/${item.key}`, { priority: item.priority })),
+    )
+    notice.value = `已按新顺序更新 ${changed.length} 个数据源的优先级`
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '保存优先级失败'
+    await load()
+  }
+}
+
 onMounted(load)
 </script>
 
 <template>
-  <section class="mx-auto w-full max-w-4xl px-4 py-6 md:px-6">
+  <section class="mx-auto w-full max-w-[110rem] px-4 py-6 md:px-6">
     <h1 class="font-display text-2xl font-semibold tracking-tight">设置</h1>
     <p class="mt-1 text-sm text-muted">库路径、刮削源、AI 辅助与运行状态</p>
 
@@ -153,8 +183,8 @@ onMounted(load)
       {{ notice }}
     </p>
 
-    <div class="mt-6 space-y-6">
-      <section class="rounded-card border border-border bg-surface p-4">
+    <div class="mt-6 gap-4 xl:columns-2">
+      <section class="mb-4 break-inside-avoid rounded-card border border-border bg-surface p-4">
         <h2 class="text-base font-medium">音乐库</h2>
         <p class="mt-1 text-xs text-muted">库根目录为路径白名单，所有文件访问都会校验是否位于其内。</p>
 
@@ -200,23 +230,39 @@ onMounted(load)
         <p class="mt-2 text-xs text-muted">扫描会增量识别新文件与变更，已完成落库与标签读取。</p>
       </section>
 
-      <section class="rounded-card border border-border bg-surface p-4">
+      <section class="mb-4 break-inside-avoid rounded-card border border-border bg-surface p-4">
         <h2 class="text-base font-medium">刮削源</h2>
-        <p class="mt-1 text-xs text-muted">默认仅启用开放数据源；高风险源不内置，以社区插件形式提供。</p>
+        <p class="mt-1 text-xs text-muted">
+          默认仅启用开放数据源；高风险源不内置，以社区插件形式提供。
+          <span class="text-muted">按住右侧手柄拖动排序</span>：越靠前越先使用，同时决定元数据检索顺序与歌词回退顺序。
+        </p>
 
         <ul class="mt-3 divide-y divide-border/60">
-          <li v-for="provider in providers" :key="provider.key" class="flex items-center gap-3 py-2.5 text-sm">
+          <li
+            v-for="(provider, index) in providerList"
+            :key="provider.key"
+            class="flex items-center gap-3 py-2.5 text-sm transition-opacity"
+            :class="draggingIndex === index ? 'opacity-40' : ''"
+            draggable="true"
+            @dragstart="draggingIndex = index"
+            @dragover.prevent
+            @drop="onDrop(index)"
+            @dragend="draggingIndex = null"
+          >
+            <span class="w-6 shrink-0 text-center font-mono text-xs text-muted">
+              {{ index + 1 }}
+            </span>
             <span class="min-w-0 flex-1">
               <span class="block">{{ provider.name }}</span>
-              <span class="block font-mono text-xs text-muted">
-                {{ provider.key }} · {{ provider.capabilities.join(' / ') || '—' }} · 优先级 {{ provider.priority }}
+              <span class="block truncate font-mono text-xs text-muted">
+                {{ provider.key }} · {{ provider.capabilities.join(' / ') || '—' }}
               </span>
             </span>
             <button
               type="button"
               role="switch"
               :aria-checked="provider.enabled"
-              class="relative h-5 w-9 rounded-full border transition-colors"
+              class="relative h-5 w-9 shrink-0 rounded-full border transition-colors"
               :class="provider.enabled ? 'border-brand bg-brand/30' : 'border-border bg-surface-2'"
               @click="toggleProvider(provider)"
             >
@@ -225,11 +271,25 @@ onMounted(load)
                 :class="provider.enabled ? 'left-4 bg-brand' : 'left-0.5 bg-muted'"
               />
             </button>
+            <span
+              class="shrink-0 cursor-grab select-none rounded-control p-1 text-muted transition-colors hover:bg-surface-2 hover:text-text active:cursor-grabbing"
+              title="拖动调整顺序"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor" class="h-4 w-4">
+                <circle cx="9" cy="6" r="1.6" />
+                <circle cx="15" cy="6" r="1.6" />
+                <circle cx="9" cy="12" r="1.6" />
+                <circle cx="15" cy="12" r="1.6" />
+                <circle cx="9" cy="18" r="1.6" />
+                <circle cx="15" cy="18" r="1.6" />
+              </svg>
+            </span>
           </li>
         </ul>
       </section>
 
-      <section class="rounded-card border border-border bg-surface p-4">
+      <section class="mb-4 break-inside-avoid rounded-card border border-border bg-surface p-4">
         <div class="flex items-start justify-between gap-3">
           <div>
             <h2 class="text-base font-medium">AI 辅助识别</h2>
@@ -315,7 +375,7 @@ onMounted(load)
         </div>
       </section>
 
-      <section class="rounded-card border border-border bg-surface p-4">
+      <section class="mb-4 break-inside-avoid rounded-card border border-border bg-surface p-4">
         <div class="flex items-start justify-between gap-3">
           <div>
             <h2 class="text-base font-medium">指纹识别（AcoustID）</h2>
@@ -372,7 +432,7 @@ onMounted(load)
         </p>
       </section>
 
-      <section class="rounded-card border border-border bg-surface p-4">
+      <section class="mb-4 break-inside-avoid rounded-card border border-border bg-surface p-4">
         <h2 class="text-base font-medium">运行状态</h2>
         <dl v-if="health" class="mt-3 grid grid-cols-2 gap-y-2 text-sm sm:grid-cols-4">
           <div>

@@ -127,6 +127,9 @@ class TrackRead(BaseModel):
     has_cover: bool = False
     cover_mtime: datetime | None = None
     has_lyrics: bool = False
+    has_embedded_lyrics: bool = False
+    has_lyrics_file: bool = False
+    has_word_lyrics: bool = False
     tag_status: str = "UNKNOWN"
     created_at: datetime
     updated_at: datetime
@@ -155,6 +158,14 @@ class TrackFacets(BaseModel):
     tag_status: dict[str, int] = Field(default_factory=dict)
     has_cover: dict[str, int] = Field(default_factory=dict)
     has_lyrics: dict[str, int] = Field(default_factory=dict)
+    has_word_lyrics: dict[str, int] = Field(default_factory=dict)
+
+
+class TrackIds(BaseModel):
+    """按当前筛选条件命中的全部曲目 id（用于「选择全部」批量操作）。"""
+
+    ids: list[int] = Field(default_factory=list)
+    total: int = 0
 
 
 # --------------------------------------------------------------------------- #
@@ -227,6 +238,47 @@ class LyricsWriteRequest(BaseModel):
     validate_lrc: bool = True
 
 
+class LyricsTranslateRequest(BaseModel):
+    """AI 歌词翻译：省略 ``content`` 时读取文件中的现有歌词。"""
+
+    target: Literal["zh", "en", "ja"] = "zh"
+    content: str | None = None
+
+
+class LyricsTranslateResponse(BaseModel):
+    track_id: int
+    target: str
+    content: str  # 原文 + 译文 的双语对照 LRC
+
+
+class WordLyricWord(BaseModel):
+    text: str
+    offset: int = 0  # 相对行首的毫秒偏移
+    duration: int = 0
+
+
+class WordLyricLine(BaseModel):
+    start: int = 0  # 行起点（毫秒）
+    duration: int = 0
+    text: str = ""
+    words: list[WordLyricWord] = Field(default_factory=list)
+
+
+class WordLyricsResponse(BaseModel):
+    """逐字歌词（只读预览，不落盘）。"""
+
+    track_id: int
+    available: bool = False
+    source: str | None = None
+    lines: list[WordLyricLine] = Field(default_factory=list)
+
+
+class WordLyricsBatchRequest(BaseModel):
+    """批量获取逐字歌词并写入边车文件。"""
+
+    ids: list[int] = Field(min_length=1)
+
+
 # --------------------------------------------------------------------------- #
 # 刮削（F7 / §9）
 # --------------------------------------------------------------------------- #
@@ -277,8 +329,16 @@ class ScrapeApplyRequest(BaseModel):
         ),
     )
     only_missing: bool = False
+    fields: list[str] | None = Field(
+        default=None,
+        description="限定写入的标签字段白名单；None=写入候选提供的全部字段（逐字段勾选）",
+    )
     apply_cover: bool = False
     apply_lyrics: bool = False
+    write_lyrics_files: bool = Field(
+        default=False,
+        description="是否同时抓取逐字歌词并写入 .lrc + .nilyric 边车文件",
+    )
 
 
 class ScrapeApplyResponse(BaseModel):
@@ -286,6 +346,9 @@ class ScrapeApplyResponse(BaseModel):
     applied_fields: list[str] = Field(default_factory=list)
     cover_applied: bool = False
     lyrics_applied: bool = False
+    lyrics_found: bool = False
+    word_found: bool = False
+    lyrics_files_written: bool = False
     diffs: list[FieldDiff] = Field(default_factory=list)
 
 
@@ -547,6 +610,8 @@ class ScrapeJobCreateRequest(BaseModel):
     ids: list[int] = Field(min_length=1)
     providers: list[str] | None = None
     only_missing: bool = True
+    apply_lyrics: bool = True
+    write_lyrics_files: bool = True
 
 
 class ScrapeJobRead(BaseModel):

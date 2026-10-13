@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
-import { coverApi, filenameApi, logsApi, lyricsApi, systemApi, trackApi } from '@/api/endpoints'
-import type { OperationLog, ParseFilenameResponse, Track } from '@/api/types'
+import CoverLightbox from '@/components/CoverLightbox.vue'
+import SeekBar from '@/components/SeekBar.vue'
+import { coverApi, filenameApi, logsApi, lyricsApi, scrapeApi, systemApi, trackApi } from '@/api/endpoints'
+import type { OperationLog, ParseFilenameResponse, Track, WordLyricLine } from '@/api/types'
 import { extractAccent } from '@/lib/accent'
 import { formatBitrate, formatDateTime, formatDuration, formatSize } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
@@ -11,6 +13,33 @@ const props = defineProps<{ trackId: number | null }>()
 const emit = defineEmits<{ close: []; saved: [track: Track] }>()
 
 const ui = useUiStore()
+
+/** 宽屏改为居中弹窗，窄屏保留右侧抽屉（宽屏下贴边抽屉既挡内容又费眼力）。 */
+const wide = ref(false)
+let mediaQuery: MediaQueryList | null = null
+function syncWide(): void {
+  wide.value = mediaQuery?.matches ?? false
+}
+onMounted(() => {
+  mediaQuery = window.matchMedia('(min-width: 1024px)')
+  syncWide()
+  mediaQuery.addEventListener('change', syncWide)
+})
+onUnmounted(() => mediaQuery?.removeEventListener('change', syncWide))
+
+/** 封面放大查看 */
+const coverZoom = ref(false)
+
+/** 歌词来源（内嵌 / 同名文件 / 逐字）——分开呈现，避免只显示「有无歌词」。 */
+const lyricsSourceLabel = computed(() => {
+  const value = track.value
+  if (!value) return '—'
+  const parts: string[] = []
+  if (value.has_embedded_lyrics) parts.push('内嵌')
+  if (value.has_lyrics_file) parts.push('同名文件')
+  if (value.has_word_lyrics) parts.push('逐字')
+  return parts.length ? parts.join(' + ') : '—'
+})
 
 const TAGS: { key: string; label: string; mono?: boolean }[] = [
   { key: 'title', label: '标题' },
@@ -42,6 +71,15 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const parsing = ref(false)
 const parsed = ref<ParseFilenameResponse | null>(null)
 const aiAvailable = ref(false)
+
+// ---- 歌词：AI 双语翻译 + 逐字预览（只读）----
+const translateTarget = ref<'zh' | 'en' | 'ja'>('zh')
+const translating = ref(false)
+const wordLyrics = ref<WordLyricLine[] | null>(null)
+const wordSource = ref<string | null>(null)
+const wordLoading = ref(false)
+const savingWord = ref(false)
+
 let capabilitiesPromise: Promise<void> | null = null
 
 // ---- 试听（F10）----
@@ -66,8 +104,7 @@ function togglePlay(): void {
   else element.pause()
 }
 
-function seek(event: Event): void {
-  const value = Number((event.target as HTMLInputElement).value)
+function seekTo(value: number): void {
   currentTime.value = value
   if (audioEl.value) audioEl.value.currentTime = value
 }
@@ -147,6 +184,8 @@ async function load(id: number): Promise<void> {
   message.value = null
   coverBroken.value = false
   parsed.value = null
+  wordLyrics.value = null
+  wordSource.value = null
   resetPlayer()
   void ensureCapabilities()
   try {
@@ -202,6 +241,71 @@ async function save(): Promise<void> {
     error.value = e instanceof Error ? e.message : '保存失败'
   } finally {
     saving.value = false
+  }
+}
+
+/** AI 双语翻译：结果写回文本框，确认后再点「写入内嵌」。 */
+async function onTranslate(): Promise<void> {
+  if (!track.value) return
+  translating.value = true
+  error.value = null
+  message.value = null
+  try {
+    const result = await lyricsApi.translate(track.value.id, {
+      target: translateTarget.value,
+      content: lyrics.value || undefined,
+    })
+    lyrics.value = result.content
+    message.value = '已生成双语对照歌词，确认后点「写入内嵌」'
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '翻译失败'
+  } finally {
+    translating.value = false
+  }
+}
+
+/** 逐字歌词预览（只读，不落盘）。 */
+async function toggleWordLyrics(): Promise<void> {
+  if (wordLyrics.value) {
+    wordLyrics.value = null
+    wordSource.value = null
+    return
+  }
+  if (!track.value) return
+  wordLoading.value = true
+  error.value = null
+  try {
+    const result = await scrapeApi.wordLyrics(track.value.id)
+    wordSource.value = result.source
+    if (result.available) {
+      wordLyrics.value = result.lines
+    } else {
+      error.value = '未找到逐字歌词（需在「设置 → 刮削源」启用支持逐字的源，如酷狗）'
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '获取逐字歌词失败'
+  } finally {
+    wordLoading.value = false
+  }
+}
+
+/** 逐字歌词 → 逐字 LRC 并写入同名 .lrc（LDDC / lx-music 格式）。 */
+async function saveWordLyrics(): Promise<void> {
+  if (!track.value) return
+  savingWord.value = true
+  error.value = null
+  message.value = null
+  try {
+    const result = await lyricsApi.saveWordLyrics(track.value.id)
+    if (result.content) lyrics.value = result.content
+    lyricsSource.value = result.source
+    track.value = { ...track.value, has_lyrics: true }
+    message.value = '已写入两个同名歌词文件：逐行 .lrc 与 逐字 .nilyric'
+    emit('saved', track.value)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '逐字歌词写入失败'
+  } finally {
+    savingWord.value = false
   }
 }
 
@@ -278,7 +382,14 @@ watch(
 <template>
   <div class="fixed inset-0 z-40 bg-black/50" aria-hidden="true" @click="close" />
   <aside
-    class="fixed inset-y-0 right-0 z-50 flex w-full max-w-xl flex-col border-l border-border bg-surface"
+    class="fixed z-50 flex flex-col border-border bg-surface"
+    :class="
+      wide
+        ? 'left-1/2 top-1/2 max-h-[88vh] w-[min(46rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-card border shadow-2xl'
+        : 'inset-y-0 right-0 w-full max-w-xl border-l'
+    "
+    role="dialog"
+    aria-modal="true"
     aria-label="曲目检查器"
     @keydown="onKeydown"
   >
@@ -299,7 +410,7 @@ watch(
       </button>
     </header>
 
-    <div class="flex-1 overflow-y-auto px-4 py-4">
+    <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
       <p v-if="loading" class="py-10 text-center text-sm text-muted">加载中…</p>
       <template v-else-if="track">
         <p v-if="error" class="mb-3 rounded-control border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
@@ -314,7 +425,14 @@ watch(
 
         <!-- 封面 -->
         <div class="flex gap-4">
-          <div class="h-32 w-32 shrink-0 overflow-hidden rounded-card border border-border bg-surface-2">
+          <button
+            type="button"
+            class="h-32 w-32 shrink-0 overflow-hidden rounded-card border border-border bg-surface-2"
+            :class="track.has_cover && !coverBroken ? 'cursor-zoom-in' : 'cursor-default'"
+            :title="track.has_cover && !coverBroken ? '点击放大封面' : ''"
+            :aria-label="track.has_cover && !coverBroken ? '放大封面' : '封面'"
+            @click="track.has_cover && !coverBroken && (coverZoom = true)"
+          >
             <img
               v-if="!coverBroken"
               :src="coverUrl"
@@ -329,7 +447,7 @@ watch(
                 <circle cx="32" cy="32" r="2.5" fill="currentColor" />
               </svg>
             </div>
-          </div>
+          </button>
           <div class="flex flex-col gap-2">
             <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="onFileChange" />
             <button
@@ -375,17 +493,11 @@ watch(
           <span class="w-9 shrink-0 text-right font-mono text-[11px] text-muted">
             {{ clock(currentTime) }}
           </span>
-          <input
-            type="range"
-            min="0"
-            :max="duration || 0"
-            step="0.1"
-            :value="currentTime"
+          <SeekBar
+            :current="currentTime"
+            :duration="duration"
             :disabled="!duration"
-            aria-label="播放进度"
-            class="h-1 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-border disabled:cursor-default"
-            :style="{ accentColor: 'var(--accent-dynamic)' }"
-            @input="seek"
+            @seek="seekTo"
           />
           <span class="w-9 shrink-0 font-mono text-[11px] text-muted">
             {{ clock(duration) }}
@@ -496,22 +608,61 @@ watch(
           <div><dt class="text-muted">位深</dt><dd>{{ track.bit_depth ? `${track.bit_depth} bit` : '—' }}</dd></div>
           <div><dt class="text-muted">大小</dt><dd>{{ formatSize(track.size) }}</dd></div>
           <div><dt class="text-muted">状态</dt><dd>{{ track.tag_status }}</dd></div>
+          <div><dt class="text-muted">歌词</dt><dd>{{ lyricsSourceLabel }}</dd></div>
           <div class="col-span-2 sm:col-span-1"><dt class="text-muted">修改时间</dt><dd>{{ formatDateTime(track.mtime) }}</dd></div>
         </dl>
 
         <!-- 歌词 -->
-        <div class="mt-6 flex items-center justify-between">
+        <div class="mt-6 flex flex-wrap items-center justify-between gap-2">
           <h3 class="text-xs font-medium uppercase tracking-wide text-muted">
             歌词<span v-if="lyricsSource" class="ml-1 normal-case text-muted">（来源：{{ lyricsSource }}）</span>
           </h3>
-          <button
-            type="button"
-            class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-brand/60 hover:text-text disabled:opacity-50"
-            :disabled="savingLyrics"
-            @click="saveLyrics"
-          >
-            {{ savingLyrics ? '写入中…' : '写入内嵌' }}
-          </button>
+          <div class="flex flex-wrap items-center gap-1.5">
+            <select
+              v-model="translateTarget"
+              class="rounded-control border border-border bg-bg px-2 py-1 text-xs text-text outline-none focus:border-brand"
+              aria-label="翻译目标语言"
+            >
+              <option value="zh">译中文</option>
+              <option value="en">译 English</option>
+              <option value="ja">译 日本語</option>
+            </select>
+            <button
+              type="button"
+              class="rounded-control border border-brand/50 px-2.5 py-1 text-xs text-brand transition-colors hover:bg-brand/10 disabled:opacity-50"
+              :disabled="translating || loading || !aiAvailable"
+              :title="aiAvailable ? '用 AI 生成双语对照歌词（确认后再写入）' : '需在「设置」中启用 AI 辅助'"
+              @click="onTranslate"
+            >
+              {{ translating ? '翻译中…' : 'AI 翻译' }}
+            </button>
+            <button
+              type="button"
+              class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-brand/60 hover:text-text disabled:opacity-50"
+              :disabled="wordLoading || loading"
+              title="逐字歌词预览（只读，不写入文件）"
+              @click="toggleWordLyrics"
+            >
+              {{ wordLoading ? '获取中…' : wordLyrics ? '收起逐字' : '逐字预览' }}
+            </button>
+            <button
+              type="button"
+              class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-brand/60 hover:text-text disabled:opacity-50"
+              :disabled="savingWord || loading"
+              title="写入两个同名歌词文件：标准逐行 .lrc + 逐字 .nilyric（逐字需支持该标记的播放器）"
+              @click="saveWordLyrics"
+            >
+              {{ savingWord ? '写入中…' : '逐字存为文件' }}
+            </button>
+            <button
+              type="button"
+              class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-brand/60 hover:text-text disabled:opacity-50"
+              :disabled="savingLyrics"
+              @click="saveLyrics"
+            >
+              {{ savingLyrics ? '写入中…' : '写入内嵌' }}
+            </button>
+          </div>
         </div>
         <textarea
           v-model="lyrics"
@@ -519,6 +670,28 @@ watch(
           placeholder="[00:01.00] 支持 LRC 时间轴"
           class="mt-2 w-full rounded-control border border-border bg-bg px-3 py-2 font-mono text-xs text-text outline-none focus:border-brand"
         />
+
+        <!-- 逐字歌词预览（只读，不落盘） -->
+        <div
+          v-if="wordLyrics"
+          class="mt-2 max-h-60 overflow-y-auto rounded-control border border-border bg-bg p-2.5 text-xs"
+        >
+          <p class="mb-1.5 text-[11px] text-muted">
+            逐字歌词预览 · 来源：{{ wordSource || '—' }} · 仅预览，不写入文件
+          </p>
+          <div v-for="(line, i) in wordLyrics" :key="i" class="flex gap-2 py-0.5">
+            <span class="shrink-0 font-mono text-[10px] text-muted">{{ clock(line.start / 1000) }}</span>
+            <span class="min-w-0 flex-1 leading-relaxed">
+              <span
+                v-for="(word, j) in line.words"
+                :key="j"
+                class="rounded px-0.5 hover:bg-surface-2"
+                :title="`+${word.offset}ms · ${word.duration}ms`"
+                >{{ word.text }}</span
+              >
+            </span>
+          </div>
+        </div>
 
         <!-- 最近操作 -->
         <h3 class="mt-6 text-xs font-medium uppercase tracking-wide text-muted">最近操作</h3>
@@ -553,4 +726,12 @@ watch(
       </button>
     </footer>
   </aside>
+
+  <CoverLightbox
+    v-if="coverZoom && track && track.has_cover"
+    :track-id="track.id"
+    :title="track.title"
+    :artist="track.artist"
+    @close="coverZoom = false"
+  />
 </template>

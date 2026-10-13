@@ -32,12 +32,16 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libchromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装后端（先拷依赖描述以利用构建缓存）
+# 安装后端依赖与项目本体（分两步，避免每次改源码都重新下载依赖）
+# 1) 只拷依赖描述：只要 pyproject.toml 不变，这一层就命中缓存（不重新下载）
 COPY backend/pyproject.toml ./backend/pyproject.toml
+RUN python -c "import tomllib,sys,subprocess;deps=tomllib.load(open('backend/pyproject.toml','rb'))['project']['dependencies'];subprocess.check_call([sys.executable,'-m','pip','install','--no-cache-dir',*deps])"
+
+# 2) 再拷源码并安装项目自身：依赖已就绪，--no-deps 使这一步几乎不产生下载
 COPY backend/app ./backend/app
 COPY backend/alembic ./backend/alembic
 COPY backend/alembic.ini ./backend/alembic.ini
-RUN pip install --no-cache-dir ./backend
+RUN pip install --no-cache-dir --no-deps ./backend
 
 # 前端构建产物
 COPY --from=frontend /build/frontend/dist ./frontend/dist

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
 from app.core.db import get_session
@@ -22,6 +22,7 @@ def list_logs(
     track_id: int | None = None,
     source: str | None = None,
     result: str | None = None,
+    q: str | None = None,
     session: Session = Depends(get_session),
 ) -> Page[OperationLogRead]:
     filters = []
@@ -31,6 +32,16 @@ def list_logs(
         filters.append(OperationLog.source == source)
     if result:
         filters.append(OperationLog.result == result)
+    if q:
+        like = f"%{q}%"
+        filters.append(
+            or_(
+                OperationLog.action.like(like),
+                OperationLog.field.like(like),
+                OperationLog.old_value.like(like),
+                OperationLog.new_value.like(like),
+            )
+        )
 
     statement = select(OperationLog)
     count_statement = select(func.count()).select_from(OperationLog)

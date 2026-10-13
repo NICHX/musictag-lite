@@ -69,6 +69,12 @@ export const useLibraryStore = defineStore('library', () => {
     selectedIds.value = new Set(tracks.value.map((track) => track.id))
   }
 
+  /** 选择当前筛选命中的全部曲目（跨页），用于全库批量操作。 */
+  async function selectAllMatching(): Promise<void> {
+    const result = await trackApi.ids({ ...query })
+    selectedIds.value = new Set(result.ids)
+  }
+
   function clearSelection(): void {
     selectedIds.value = new Set()
   }
@@ -97,6 +103,7 @@ export const useLibraryStore = defineStore('library', () => {
     toggle,
     selectOnly,
     selectAllOnPage,
+    selectAllMatching,
     clearSelection,
     removeLibrary,
   }
