@@ -41,6 +41,8 @@ RUN python -c "import tomllib,sys,subprocess;deps=tomllib.load(open('backend/pyp
 COPY backend/app ./backend/app
 COPY backend/alembic ./backend/alembic
 COPY backend/alembic.ini ./backend/alembic.ini
+# 可安装扩展目录（内置 catalog；社区源以可安装扩展形式分发，需在设置页安装）
+COPY backend/extensions ./backend/extensions
 RUN pip install --no-cache-dir --no-deps ./backend
 
 # 前端构建产物

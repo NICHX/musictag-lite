@@ -64,17 +64,23 @@ const coverVersion = ref(0)
 
 const selectedFields = ref<Record<string, boolean>>({})
 const applyCover = ref(true)
-const applyLyrics = ref(true)
-/** 同时抓逐字歌词并写 .lrc + .nilyric 同名歌词文件 */
-const writeLyricsFiles = ref(true)
+/**
+ * 歌词写入模式：
+ * - none：不写入
+ * - plain：仅逐行内嵌
+ * - word：逐字（含数据源译文）写入内嵌 + 同名 .nilyric
+ */
+const lyricsMode = ref<'none' | 'plain' | 'word'>('word')
+const applyLyrics = computed(() => lyricsMode.value !== 'none')
+const writeWordLyrics = computed(() => lyricsMode.value === 'word')
 const lastResult = ref<{
   title: string
   fields: string[]
   cover: boolean
   lyrics: boolean
-  filesAttempted: boolean
+  wordAttempted: boolean
   wordFound: boolean
-  filesWritten: boolean
+  wordWritten: boolean
 } | null>(null)
 const notice = ref<string | null>(null)
 const batching = ref(false)
@@ -149,8 +155,8 @@ const resultSummary = computed(() => {
     ? `标签 ${result.fields.length} 项（${result.fields.map(fieldLabel).join('、')}）`
     : '标签无改动'
   const flags = [`封面 ${result.cover ? '✓' : '×'}`, `歌词 ${result.lyrics ? '✓' : '×'}`]
-  if (result.filesAttempted) {
-    flags.push(`逐字 ${result.wordFound ? '✓' : '×'}`, `歌词文件 ${result.filesWritten ? '✓' : '×'}`)
+  if (result.wordAttempted) {
+    flags.push(`逐字 ${result.wordFound ? '✓' : '×'}`, `逐字写入 ${result.wordWritten ? '✓' : '×'}`)
   }
   return [tagPart, ...flags].join(' · ')
 })
@@ -308,7 +314,6 @@ function resetPlan(): void {
   for (const row of rows.value) next[row.key] = row.changed && !row.blocked
   selectedFields.value = next
   applyCover.value = !!chosenCandidate.value?.cover_url && !currentTrack.value?.has_cover
-  applyLyrics.value = true
 }
 
 watch(chosenCandidate, () => resetPlan())
@@ -460,7 +465,7 @@ async function applyCurrent(advanceToNext: boolean): Promise<void> {
       fields,
       apply_cover: applyCover.value && !!picked.cover_url,
       apply_lyrics: applyLyrics.value,
-      write_lyrics_files: writeLyricsFiles.value,
+      write_word_lyrics: writeWordLyrics.value,
     })
     // 记录可撤销快照（标签旧值 + 是否需删除「本次新增」的封面）
     const previous: Record<string, unknown> = {}
@@ -484,10 +489,10 @@ async function applyCurrent(advanceToNext: boolean): Promise<void> {
       title: refreshed.title || track.filename,
       fields: result.applied_fields,
       cover: result.cover_applied,
-      lyrics: result.lyrics_applied,
-      filesAttempted: writeLyricsFiles.value,
+      lyrics: result.lyrics_applied || result.word_written,
+      wordAttempted: writeWordLyrics.value,
       wordFound: result.word_found,
-      filesWritten: result.lyrics_files_written,
+      wordWritten: result.word_written,
     }
     syncQueryForm()
     if (advanceToNext) advance()
@@ -509,7 +514,7 @@ async function batchMatch(): Promise<void> {
       ids: queue.value,
       only_missing: true,
       apply_lyrics: applyLyrics.value,
-      write_lyrics_files: writeLyricsFiles.value,
+      write_word_lyrics: writeWordLyrics.value,
     })
     notice.value = `已启动批量匹配（任务 #${task.task_id}），进度与逐条结果见任务中心`
     tasks.connect()
@@ -1166,15 +1171,27 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
               </ul>
             </div>
 
-            <div class="space-y-1.5 border-t border-border/60 pt-3 text-xs text-muted">
-              <label class="flex items-center gap-1.5">
-                <input v-model="applyLyrics" type="checkbox" />
-                写入内嵌歌词
-              </label>
-              <label class="flex items-center gap-1.5">
-                <input v-model="writeLyricsFiles" type="checkbox" />
-                写入歌词文件（.lrc 逐行 + .nilyric 逐字）
-              </label>
+            <div class="space-y-2 border-t border-border/60 pt-3 text-xs text-muted">
+              <div class="flex items-center justify-between gap-2">
+                <span>歌词写入</span>
+                <select
+                  v-model="lyricsMode"
+                  class="rounded-control border border-border bg-bg px-1.5 py-1 text-xs text-text outline-none focus:border-brand"
+                >
+                  <option value="none">不写入</option>
+                  <option value="plain">仅逐行内嵌</option>
+                  <option value="word">逐字（含译文）</option>
+                </select>
+              </div>
+              <p class="text-[11px] leading-relaxed">
+                {{
+                  lyricsMode === 'none'
+                    ? '不写入任何歌词'
+                    : lyricsMode === 'plain'
+                      ? '内嵌写入逐行歌词（普通播放器通用）'
+                      : '抓取逐字歌词（仅并入数据源译文，不调用 AI）写入内嵌 + 同名 .nilyric'
+                }}
+              </p>
             </div>
 
             <div class="border-t border-border/60 pt-3">

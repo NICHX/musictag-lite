@@ -31,6 +31,19 @@ logger = get_logger(__name__)
 _FILENAME_NOISE = re.compile(r"^\s*\d{1,3}[\s._-]+")
 # 分词：保留字母/数字/中日韩字符（用于与分隔符无关的覆盖率打分）
 _TOKEN_RE = re.compile(r"[0-9a-z\u4e00-\u9fff]+")
+# 「翻唱/伴奏/纯音乐/live」等非原唱版本标记：命中即降级，避免翻唱压过原唱
+_VERSION_NOISE = re.compile(
+    r"(cover|翻唱|伴奏|纯音乐|off\s*vocal|instrumental|karaoke|remix|remaster|re-?record|"
+    r"和声|合唱|对唱|女声|男声|抖音|tribute|演唱会|现场|\blive\b|dj\s*版|改编)",
+    re.IGNORECASE,
+)
+
+# 综合打分权重（缺失信号不计分）：
+# 弱化"平台/MB 相关性"（名次高≠原唱），提高"艺术家"权重（区分原唱/翻唱的关键）
+_W_RELEVANCE = 0.15
+_W_COVERAGE = 0.35
+_W_TITLE = 0.20
+_W_ARTIST = 0.30
 
 
 async def _none() -> None:
@@ -62,18 +75,41 @@ def coverage_score(query_text: str | None, candidate: Candidate) -> float:
 
 
 def score_candidate(candidate: Candidate, query: ScrapeQuery) -> float:
-    """综合打分：来源匹配分 + 查询词覆盖率 + 标题/艺术家相似度 + 音轨号一致性。"""
+    """综合打分：来源相关性 + 查询词覆盖率 + 标题/艺术家相似度 + 时长接近度（§9.4）。
+
+    针对"翻唱压过原唱"做的取舍：
+    - 弱化平台/MB 相关性（搜索名次高 ≠ 原唱）；
+    - 提高艺术家权重，且**艺术家明显不符时降级**（翻唱最常见特征）；
+    - 标题/专辑带「翻唱/伴奏/纯音乐/live…」标记时降级（用户未主动检索该版本时）；
+    - 时长差异过大时降级（不同版本时长通常不同）。
+    """
     query_text = (
         " ".join(part for part in (query.title, query.artist, query.album) if part)
         or query.filename_hint
         or ""
     )
+    artist_similarity = _similarity(query.artist, candidate.artist) if query.artist else None
+
     score = (
-        0.25 * candidate.score
-        + 0.45 * coverage_score(query_text, candidate)
-        + 0.20 * _similarity(query.title or query.filename_hint, candidate.title)
-        + 0.10 * _similarity(query.artist, candidate.artist)
+        _W_RELEVANCE * min(1.0, max(0.0, candidate.score))
+        + _W_COVERAGE * coverage_score(query_text, candidate)
+        + _W_TITLE * _similarity(query.title or query.filename_hint, candidate.title)
     )
+    if artist_similarity is not None:
+        score += _W_ARTIST * artist_similarity
+
+    # 艺术家明显不符（原唱 vs 翻唱的关键差异）→ 大幅降级
+    if artist_similarity is not None and candidate.artist and artist_similarity < 0.34:
+        score *= 0.55
+    # 标题/专辑含版本标记 → 降级（除非用户本就在检索该版本）
+    version_text = " ".join(part for part in (candidate.title, candidate.album) if part)
+    if _VERSION_NOISE.search(version_text) and not _VERSION_NOISE.search(query_text):
+        score *= 0.7
+    # 时长接近度：差异越大越可疑
+    if query.duration and candidate.duration:
+        low, high = sorted((int(query.duration), int(candidate.duration)))
+        if high:
+            score *= 0.75 + 0.25 * (low / high)
     if query.track_no and candidate.track_no == query.track_no:
         score += 0.05
     return round(min(1.0, score), 4)
@@ -107,6 +143,11 @@ class ScrapeOrchestrator:
             bind = getattr(provider, "bind", None)
             if callable(bind):
                 bind(self._client)
+
+    def rebind(self) -> None:
+        """安装/卸载扩展后，把新注册的 Provider 绑定到共享 HTTP 客户端。"""
+        if self._client is not None and not self._client.is_closed:
+            self._bind_providers()
 
     def _configure_acoustid(self, session: Session | None) -> None:
         """把生效的 AcoustID Key（界面设置 > 环境变量）注入 Provider。"""
@@ -269,7 +310,7 @@ class ScrapeOrchestrator:
         fields: list[str] | None = None,
         apply_cover: bool = False,
         apply_lyrics: bool = False,
-        write_lyrics_files: bool = False,
+        write_word_lyrics: bool = False,
     ) -> dict[str, Any]:
         """应用选中候选：写标签（可限定字段/仅补空值）、封面、歌词。
 
@@ -305,7 +346,7 @@ class ScrapeOrchestrator:
         cover, content, word_bundle = await asyncio.gather(
             self._fetch_cover(bundle) if apply_cover else _none(),
             self._fetch_lyrics(session, track) if apply_lyrics else _none(),
-            self.word_lyrics_bundle(session, track) if write_lyrics_files else _none(),
+            self.word_lyrics_bundle(session, track) if write_word_lyrics else _none(),
         )
 
         cover_applied = False
@@ -318,20 +359,27 @@ class ScrapeOrchestrator:
             )
             cover_applied = True
 
-        lyrics_found = bool(content)
-        lyrics_applied = False
-        if content:
-            LyricsService().write(session, track, content, target="embedded", source=SOURCE_SCRAPE)
-            lyrics_applied = True
-
         word_found = False
-        lyrics_files_written = False
+        word_written = False
         if word_bundle is not None:
             _source, plain, word = word_bundle
             word_found = bool(word)
             if word:
-                LyricsService().write_word_sidecars(session, track, plain=plain, word=word)
-                lyrics_files_written = True
+                # 逐字歌词（若数据源歌词含译文，则并入）写「内嵌 + 同名 .nilyric」
+                from app.services.word_lyrics import merge_word_translation
+
+                merged = merge_word_translation(word, content or plain)
+                LyricsService().write_final(
+                    session, track, merged, targets=["embedded", "nilyric"], source=SOURCE_SCRAPE
+                )
+                word_written = True
+
+        lyrics_found = bool(content)
+        lyrics_applied = False
+        # 已写逐字歌词时，内嵌已是最终产物，不再单独写逐行
+        if content and not word_written:
+            LyricsService().write(session, track, content, target="embedded", source=SOURCE_SCRAPE)
+            lyrics_applied = True
 
         return {
             "applied_fields": [item["field"] for item in diffs],
@@ -340,7 +388,7 @@ class ScrapeOrchestrator:
             "lyrics_applied": lyrics_applied,
             "lyrics_found": lyrics_found,
             "word_found": word_found,
-            "lyrics_files_written": lyrics_files_written,
+            "word_written": word_written,
         }
 
     # ---- 内部 ----
@@ -473,7 +521,7 @@ class ScrapeOrchestrator:
 
     async def word_lyrics_bundle(self, session: Session | None, track: Track) -> tuple[str, str, str]:
         """逐字歌词 → ``(来源, 逐行 LRC, 逐字 LRC)``（后者为 LDDC / lx-music 格式）。"""
-        from app.providers.community._krc import to_plain_lrc, to_word_lrc
+        from app.services.word_lyrics import to_plain_lrc, to_word_lrc
 
         source, lines = await self.word_lyrics(session, track)
         if not lines:
@@ -494,6 +542,51 @@ class ScrapeOrchestrator:
             if lyrics is not None and lyrics.content:
                 return lyrics.content
         return None
+
+    async def fetch_lyrics_text(self, session: Session | None, track: Track) -> str | None:
+        """按启用顺序抓取歌词文本（部分源如网易云/QQ 已含译文，返回双语 LRC）。"""
+        self.client()
+        return await self._fetch_lyrics(session, track)
+
+    async def word_lyrics_final(
+        self,
+        session: Session | None,
+        track: Track,
+        *,
+        translation: str = "source",
+        translate_target: str = "zh",
+    ) -> str | None:
+        """抓取逐字歌词并（按 ``translation`` 模式）并入译文，返回最终文本。
+
+        单文件编辑与批量**共用此实现**，确保写入内容一致：
+
+        - ``none``：只逐字；
+        - ``source``：并入数据源自带译文（网易云 / QQ，免费）；
+        - ``ai``：显式调用 AI 生成译文（可能产生费用），AI 不可用时抛 ``LyricsTranslateError``。
+
+        无逐字歌词时返回 ``None``。
+        """
+        from app.services.word_lyrics import has_translation, merge_word_translation
+
+        _source, plain, word = await self.word_lyrics_bundle(session, track)
+        if not word:
+            return None
+
+        text: str | None = None
+        if translation == "source":
+            bilingual = await self.fetch_lyrics_text(session, track)
+            if has_translation(word, bilingual):
+                text = bilingual
+        elif translation == "ai":
+            from app.services import ai_config
+            from app.services.lyrics_translate import LyricsTranslateError, translate_lyrics
+
+            config = ai_config.resolve(session)
+            if not config.available:
+                raise LyricsTranslateError("AI 未启用：无法生成译文（可在「设置」中配置）")
+            text = await translate_lyrics(plain, target=translate_target, config=config)
+
+        return merge_word_translation(word, text or "")
 
 
 # 全局单例

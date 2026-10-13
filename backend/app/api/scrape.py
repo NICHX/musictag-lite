@@ -29,11 +29,11 @@ from app.models.schemas import (
     WordLyricsResponse,
 )
 from app.providers.base import Candidate, ScrapeQuery
-from app.providers.community._krc import parse_word_lrc
 from app.services import acoustid_config
 from app.services.fingerprint import FingerprintUnavailable, fpcalc_available
 from app.services.lyrics_service import LyricsService, nilyric_path_for
 from app.services.scrape_orchestrator import scrape_orchestrator
+from app.services.word_lyrics import parse_word_lrc
 
 router = APIRouter(prefix="/scrape", tags=["scrape"])
 logger = get_logger(__name__)
@@ -134,7 +134,7 @@ async def fingerprint(
 async def word_lyrics(
     track_id: int, session: Session = Depends(get_session)
 ) -> WordLyricsResponse:
-    """逐字歌词：优先读本地 ``.nilyric`` 边车，其次联网抓取（酷狗 KRC / QQ QRC）。"""
+    """逐字歌词：优先读本地 ``.nilyric`` 边车或内嵌逐字，其次联网抓取（酷狗 KRC / QQ QRC）。"""
     track = get_track_or_404(session, track_id)
     ensure_track_path(session, track)
     sidecar = nilyric_path_for(track)
@@ -145,6 +145,17 @@ async def word_lyrics(
                 track_id=track_id,
                 available=True,
                 source="local",
+                lines=[WordLyricLine(**line) for line in lines],
+            )
+    # 内嵌逐字（写入内嵌后无 .nilyric 时也能预览）
+    embedded, _source = LyricsService().read(track)
+    if embedded and "[[" in embedded:
+        lines = parse_word_lrc(embedded)
+        if lines:
+            return WordLyricsResponse(
+                track_id=track_id,
+                available=True,
+                source="embedded",
                 lines=[WordLyricLine(**line) for line in lines],
             )
     source, lines = await scrape_orchestrator.word_lyrics(session, track)
@@ -158,7 +169,10 @@ async def word_lyrics(
 
 @router.post("/word-lyrics", response_model=TaskAccepted)
 async def create_word_lyrics_job(payload: WordLyricsBatchRequest) -> TaskAccepted:
-    """批量获取逐字歌词并写入 ``.lrc``（逐行）+ ``.nilyric``（逐字）边车。"""
+    """批量抓取逐字歌词并写入所选目标（内嵌 / ``.nilyric`` / ``.lrc``）。
+
+    译文仅取**数据源自带**（``translation=source``，默认）；``none`` 则不写译文。批量**不调用 AI**。
+    """
 
     async def runner(ctx) -> None:  # noqa: ANN001
         await ctx.set_total(len(payload.ids))
@@ -173,16 +187,17 @@ async def create_word_lyrics_job(payload: WordLyricsBatchRequest) -> TaskAccepte
                         await ctx.advance(message=f"× #{track_id} 不存在")
                         continue
                     label = track.title or track.filename
-                    _source, plain, word = await scrape_orchestrator.word_lyrics_bundle(
-                        session, track
+                    # 与单文件编辑共用同一实现，确保写入内容一致
+                    merged = await scrape_orchestrator.word_lyrics_final(
+                        session, track, translation=payload.translation
                     )
-                    if word:
-                        LyricsService().write_word_sidecars(session, track, plain=plain, word=word)
-                        written += 1
-                        await ctx.advance(current=label, message=f"✓ {label} · 已写入边车")
-                    else:
+                    if merged is None:
                         missing += 1
                         await ctx.advance(current=label, message=f"– {label} · 无逐字歌词")
+                        continue
+                    LyricsService().write_final(session, track, merged, targets=payload.targets)
+                    written += 1
+                    await ctx.advance(current=label, message=f"✓ {label} · 已写入")
             except Exception:  # noqa: BLE001 - 单条失败不影响整批
                 missing += 1
                 logger.exception("word_lyrics.item_failed", extra={"track_id": track_id})
@@ -227,7 +242,7 @@ async def apply(
         fields=payload.fields,
         apply_cover=payload.apply_cover,
         apply_lyrics=payload.apply_lyrics,
-        write_lyrics_files=payload.write_lyrics_files,
+        write_word_lyrics=payload.write_word_lyrics,
     )
     return ScrapeApplyResponse(
         track_id=track.id,  # type: ignore[arg-type]
@@ -236,7 +251,7 @@ async def apply(
         lyrics_applied=result["lyrics_applied"],
         lyrics_found=result["lyrics_found"],
         word_found=result["word_found"],
-        lyrics_files_written=result["lyrics_files_written"],
+        word_written=result["word_written"],
         diffs=[FieldDiff(**item) for item in result["diffs"]],
     )
 
@@ -284,14 +299,14 @@ async def create_job(payload: ScrapeJobCreateRequest) -> TaskAccepted:
                             only_missing=payload.only_missing,
                             apply_cover=True,
                             apply_lyrics=payload.apply_lyrics,
-                            write_lyrics_files=payload.write_lyrics_files,
+                            write_word_lyrics=payload.write_word_lyrics,
                         )
                         applied += 1
                         fields = "、".join(result["applied_fields"]) or "无字段变更"
                         extra = (
                             f" · 歌词{'✓' if result['lyrics_applied'] else '×'}"
-                            + (f" · 逐字{'✓' if result['word_found'] else '×'}" if payload.write_lyrics_files else "")
-                            + (" · 文件已写" if result["lyrics_files_written"] else "")
+                            + (f" · 逐字{'✓' if result['word_found'] else '×'}" if payload.write_word_lyrics else "")
+                            + (" · 逐字已写入" if result["word_written"] else "")
                         )
                         await ctx.advance(
                             current=label,

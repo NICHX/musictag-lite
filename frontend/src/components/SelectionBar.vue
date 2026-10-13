@@ -16,7 +16,7 @@ const tasks = useTaskStore()
 const ui = useUiStore()
 const showCover = ref(false)
 
-/** 批量逐字歌词：后台任务抓取并写入 .lrc + .nilyric 同名歌词文件。 */
+/** 批量逐字歌词：后台任务抓取并写入 .lrc（逐行）+ .nilyric（逐字）同名歌词文件（不覆盖内嵌）。 */
 async function fetchWordLyrics(): Promise<void> {
   busy.value = true
   error.value = null
@@ -232,7 +232,7 @@ function match(): void {
         type="button"
         class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:text-text disabled:opacity-50"
         :disabled="busy"
-        title="为所选曲目抓取逐字歌词并写入 .lrc + .nilyric 同名歌词文件"
+        title="为所选曲目抓取逐字歌词并写入 .lrc（逐行）+ .nilyric（逐字）同名歌词文件"
         @click="fetchWordLyrics"
       >
         逐字歌词

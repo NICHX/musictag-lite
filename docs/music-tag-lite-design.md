@@ -314,11 +314,12 @@ musictag-lite/
 │  │  │  ├─ scrape_orchestrator.py organize_service.py convert_service.py
 │  │  ├─ audio/                  # 音频 IO 抽象
 │  │  │  ├─ base.py mutagen_io.py formats.py
-│  │  ├─ providers/              # 刮削插件
+│  │  ├─ providers/              # 刮削源
 │  │  │  ├─ base.py registry.py
-│  │  │  ├─ builtin/ musicbrainz.py coverart.py lrclib.py acoustid.py
-│  │  │  └─ community/           # 可选/社区源（默认关闭）
+│  │  │  └─ builtin/ musicbrainz.py coverart.py lrclib.py acoustid.py
+│  │  ├─ extensions/             # 扩展体系（动态加载 / 安装 / 卸载）
 │  │  └─ models/                 # DB 模型与 Pydantic schema
+│  ├─ extensions/               # 可安装扩展目录（内置 catalog；社区源以扩展形式分发）
 │  ├─ tests/
 │  ├─ pyproject.toml
 │  └─ Dockerfile
@@ -416,8 +417,9 @@ musictag-lite/
 | PUT | `/tracks/{id}/cover` | 上传/替换（multipart） |
 | DELETE | `/tracks/{id}/cover` | 删除内嵌封面 |
 | POST | `/covers/batch-export` | 批量导出封面到目录 |
-| GET | `/tracks/{id}/lyrics` | 返回歌词（含来源） |
-| PUT | `/tracks/{id}/lyrics` | 写入歌词（内嵌 / .lrc） |
+| GET | `/tracks/{id}/lyrics` | 返回歌词（内嵌优先，其次同名 `.lrc` / `.nilyric`） |
+| PUT | `/tracks/{id}/lyrics` | 写入歌词文本（内嵌 / `.lrc` / 两者） |
+| POST | `/tracks/{id}/lyrics/word` | 抓取逐字歌词写入内嵌 / `.nilyric` / `.lrc`；译文 `translation=none\|source\|ai`（默认 `source`，AI 需显式选择） |
 
 ### 8.3 刮削
 
@@ -439,6 +441,12 @@ musictag-lite/
 | POST | `/convert` | 转码任务（P2，需 ffmpeg） |
 | GET | `/logs` | 操作日志查询 |
 | GET/PATCH | `/settings` | 应用设置 |
+| GET | `/extensions` | 列出已安装扩展与可安装（内置目录）扩展 |
+| POST | `/extensions/catalog/{key}/install` | 从内置目录一键安装扩展 |
+| POST | `/extensions/install` | 上传扩展 zip 安装 |
+| DELETE | `/extensions/{key}` | 卸载扩展（注销 Provider 并清理配置） |
+| GET/PATCH | `/settings/api-token` | 对外 API 令牌（查看 / 启停 / 重新生成） |
+| GET | `/open/*` | 对外 API：核心功能白名单（浏览 + 匹配 + 单条写入），Token 鉴权；不含管理类接口 |
 | POST | `/auth/login` / `/auth/logout` | 鉴权（可选启用） |
 | WS | `/ws/events` | 任务与进度事件推送 |
 
@@ -486,8 +494,10 @@ class MetadataProvider(Protocol):
 
 ### 9.3 可插拔机制
 
-- Provider 以模块形式注册到 `registry`，启动时扫描 `providers/builtin` 与 `providers/community`。
-- `provider.toml`/类属性声明元信息与默认开闭状态。
+- Provider 以模块形式注册到 `registry`：**内置源**随核心代码集成（`providers/builtin`），
+  **社区/高风险源**以**可安装扩展**形式分发（`backend/extensions/<key>/`，含 `extension.json`
+  清单），运行时从 `<DATA_DIR>/extensions/<key>/` 动态加载；用户可一键安装/卸载。
+- `extension.json` 清单声明 key / name / version / providers；Provider 类属性声明能力与默认开闭状态。
 - 用户可在设置页启用/禁用、调整优先级；多源聚合时按匹配分排序并标注来源。
 - **网络层统一出口**：所有 Provider 经同一 httpx 客户端，集中处理超时/重试/代理/限流/磁盘缓存。
 
@@ -495,6 +505,8 @@ class MetadataProvider(Protocol):
 
 - 查询构造优先级：`已有标签(专辑+艺术家+标题)` → `文件名解析` → `指纹`。
 - 打分维度：标题相似度、艺术家一致性、专辑一致性、时长接近度、音轨号一致性、来源可信度。
+- **原唱优先**：弱化"平台搜索名次"（名次高 ≠ 原唱）；艺术家权重较高且**明显不符时降级**；
+  标题/专辑含「翻唱 / 伴奏 / 纯音乐 / live / remix…」等版本标记时降级；时长差异过大时降级。
 - 默认策略：**高置信自动应用仅补空值**；低于阈值的进入人工确认。
 
 ### 9.5 合规与免责

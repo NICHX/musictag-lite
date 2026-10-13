@@ -36,7 +36,7 @@ def upgrade_https(url: str | None) -> str | None:
 
 
 def rank_score(index: int) -> float:
-    """平台未提供相关度时的降序分数；编排层综合打分中它占比 25%。"""
+    """平台未提供相关度时的降序分数（仅反映"搜索结果名次"，不代表原唱）；编排层综合打分中占比 15%。"""
     return round(max(0.5, 1.0 - index * 0.05), 3)
 
 
@@ -44,3 +44,10 @@ def join_names(items: list[dict[str, Any]] | None, key: str = "name") -> str | N
     """把 [{name: "A"}, {name: "B"}] 拼成 "A, B"。"""
     names = [str(item.get(key)) for item in (items or []) if item.get(key)]
     return ", ".join(names) or None
+
+
+def to_int_seconds(value: Any, *, milliseconds: bool = False) -> int | None:
+    """把时长规整为整秒（``milliseconds=True`` 时按毫秒换算）；非法值返回 None。"""
+    if not isinstance(value, (int, float)) or value <= 0:
+        return None
+    return int(value) // 1000 if milliseconds else int(value)

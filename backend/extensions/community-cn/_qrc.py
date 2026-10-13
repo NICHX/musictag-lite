@@ -23,18 +23,28 @@ def extract_qrc(xml_text: str) -> str:
 
 
 def parse_qrc(content: str) -> list[dict[str, Any]]:
-    """解析为与 ``_krc`` 一致的逐行逐字结构（``offset`` 为相对行首毫秒）。"""
+    """解析为与 ``_krc`` 一致的逐行逐字结构（``offset`` 为相对行首毫秒）。
+
+    部分 QRC 的每段文本带尾随空格（如 ``无 (0,500)论 (500,500)``），会导致「一个字一个空格」，
+    这里对每段做归一化：去首尾空白；纯空白段保留为单个空格（英文分词用）。
+    """
     lines: list[dict[str, Any]] = []
     for raw in content.splitlines():
         match = _LINE.match(raw.strip())
         if not match:
             continue
         start, duration = int(match.group(1)), int(match.group(2))
-        words = [
-            {"offset": int(w_start) - start, "duration": int(w_duration), "text": text}
-            for text, w_start, w_duration in _WORD.findall(match.group(3))
-            if text
-        ]
+        words: list[dict[str, Any]] = []
+        for text, w_start, w_duration in _WORD.findall(match.group(3)):
+            token = text.strip()
+            if token:
+                words.append(
+                    {"offset": int(w_start) - start, "duration": int(w_duration), "text": token}
+                )
+            elif text:
+                words.append(
+                    {"offset": int(w_start) - start, "duration": int(w_duration), "text": " "}
+                )
         if words:
             lines.append(
                 {

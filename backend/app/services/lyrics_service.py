@@ -1,4 +1,12 @@
-"""歌词服务：内嵌歌词 + .lrc 边车读取/写入，LRC 时间轴校验（F6）。"""
+"""歌词服务：内嵌歌词 + 同名边车（``.lrc`` / ``.nilyric``）读写。
+
+最终产物只有一份文本（逐字 LRC，含译文行时即为「逐字 + 译文」），可写入：
+
+- **内嵌**（音频标签容器）；
+- **同名边车** ``.nilyric``（逐字，含字级时间轴）或 ``.lrc``（通用）。
+
+内嵌与边车互不干扰，写入目标由调用方选择。
+"""
 
 from __future__ import annotations
 
@@ -28,11 +36,12 @@ def is_lrc(content: str) -> bool:
 
 
 def lrc_path_for(track: Track) -> Path:
+    """同名 ``.lrc`` 边车路径。"""
     return Path(track.path).with_suffix(".lrc")
 
 
 def nilyric_path_for(track: Track) -> Path:
-    """逐字歌词边车文件（`.nilyric`，需支持逐字标记的播放器）。"""
+    """同名 ``.nilyric`` 边车路径（逐字歌词）。"""
     return Path(track.path).with_suffix(".nilyric")
 
 
@@ -43,7 +52,7 @@ class LyricsService:
         self.audio = audio or audio_io
 
     def read(self, track: Track) -> tuple[str | None, str | None]:
-        """返回 (歌词, 来源)：优先内嵌，其次同名 .lrc。"""
+        """返回 (歌词, 来源)：优先内嵌，其次同名 ``.lrc``、``.nilyric``。"""
         try:
             embedded = self.audio.read_lyrics(Path(track.path))
         except Exception:  # noqa: BLE001
@@ -51,9 +60,11 @@ class LyricsService:
         if embedded:
             return embedded, "embedded"
 
-        sidecar = lrc_path_for(track)
-        if sidecar.is_file():
-            return sidecar.read_text(encoding="utf-8", errors="replace"), "lrc"
+        for path, source in ((lrc_path_for(track), "lrc"), (nilyric_path_for(track), "word")):
+            if path.is_file():
+                content = path.read_text(encoding="utf-8", errors="replace")
+                if content.strip():
+                    return content, source
         return None, None
 
     def write(
@@ -65,7 +76,7 @@ class LyricsService:
         target: str = "embedded",
         source: str = "manual",
     ) -> None:
-        """写入歌词；target ∈ {embedded, lrc, both}。"""
+        """写入通用歌词文本；target ∈ {embedded, lrc, both}。"""
         if target in {"embedded", "both"}:
             self.audio.write_lyrics(Path(track.path), content)
             track.has_embedded_lyrics = True
@@ -87,20 +98,30 @@ class LyricsService:
         session.commit()
         session.refresh(track)
 
-    def write_word_sidecars(
+    def write_final(
         self,
         session: Session,
         track: Track,
+        content: str,
         *,
-        plain: str,
-        word: str,
+        targets: list[str],
         source: str = "scrape",
     ) -> None:
-        """双文件边车：``.lrc`` 写标准逐行，``.nilyric`` 写逐字（含字级时间轴）。"""
-        lrc_path_for(track).write_text(plain, encoding="utf-8")
-        nilyric_path_for(track).write_text(word, encoding="utf-8")
+        """写入最终歌词（逐字 LRC，含译文行时即「逐字 + 译文」）到所选目标。
+
+        ``targets`` ⊆ {``embedded``, ``nilyric``, ``lrc``}。
+        """
+        if "embedded" in targets:
+            self.audio.write_lyrics(Path(track.path), content)
+            track.has_embedded_lyrics = True
+        if "nilyric" in targets:
+            nilyric_path_for(track).write_text(content, encoding="utf-8")
+            track.has_word_lyrics = True
+        if "lrc" in targets:
+            lrc_path_for(track).write_text(content, encoding="utf-8")
+            track.has_lyrics_file = True
+
         track.has_lyrics = True
-        track.has_lyrics_file = True
         track.has_word_lyrics = True
         track.updated_at = utcnow()
         session.add(track)
@@ -109,7 +130,7 @@ class LyricsService:
             track_id=track.id,
             action="lyrics.write",
             field="lyrics",
-            new=f"lrc+nilyric ({len(plain)}/{len(word)} 字)",
+            new=f"{'+'.join(targets) or 'none'} ({len(content)} 字)",
             source=source,
         )
         session.commit()

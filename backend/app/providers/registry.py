@@ -1,4 +1,4 @@
-"""Provider 注册表：启动时发现 builtin/community 插件，并维护启用状态。"""
+"""Provider 注册表：启动时注册内置源，运行时可动态注册/注销扩展源。"""
 
 from __future__ import annotations
 
@@ -21,6 +21,13 @@ class ProviderRegistry:
         self._providers[provider.key] = provider
         logger.info("provider.registered", extra={"key": provider.key})
 
+    def unregister(self, key: str) -> bool:
+        """移除一个 Provider（用于卸载扩展）；返回是否确实移除。"""
+        if self._providers.pop(key, None) is None:
+            return False
+        logger.info("provider.unregistered", extra={"key": key})
+        return True
+
     def get(self, key: str) -> MetadataProvider | None:
         return self._providers.get(key)
 
@@ -34,17 +41,12 @@ class ProviderRegistry:
         return list(self._providers.keys())
 
 
-def _discover_builtin() -> list[MetadataProvider]:
-    from app.providers.builtin import BUILTIN_PROVIDERS
-    from app.providers.community import COMMUNITY_PROVIDERS
-
-    return [*BUILTIN_PROVIDERS, *COMMUNITY_PROVIDERS]
-
-
 def build_registry() -> ProviderRegistry:
-    """构建并填充注册表。"""
+    """构建并填充注册表（仅内置源；扩展源在启动时由 ExtensionManager 注册）。"""
+    from app.providers.builtin import BUILTIN_PROVIDERS
+
     registry = ProviderRegistry()
-    for provider in _discover_builtin():
+    for provider in BUILTIN_PROVIDERS:
         registry.register(provider)
     return registry
 

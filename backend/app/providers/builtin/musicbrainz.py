@@ -121,6 +121,12 @@ class MusicBrainzProvider(HTTPProvider):
         releases = item.get("releases") or []
         release = releases[0] if releases else {}
         mbid = release.get("id")
+        length_ms = item.get("length")
+        duration = (
+            int(length_ms) // 1000
+            if isinstance(length_ms, (int, float)) and length_ms
+            else None
+        )
         return Candidate(
             provider=MusicBrainzProvider.key,
             external_id=str(item.get("id", "")),
@@ -128,6 +134,7 @@ class MusicBrainzProvider(HTTPProvider):
             artist=_artist_credit(item),
             album=release.get("title"),
             year=(release.get("date") or "")[:4] or None,
+            duration=duration,
             score=float(item.get("score", 0) or 0) / 100.0,
             cover_url=_CAA_FRONT.format(mbid=mbid) if mbid else None,
             payload={"release_id": mbid, "length_ms": item.get("length")},

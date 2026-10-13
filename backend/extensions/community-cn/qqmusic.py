@@ -21,10 +21,10 @@ from app.providers.base import (
     Lyrics,
     ScrapeQuery,
 )
-from app.providers.community._common import BROWSER_UA, rank_score, search_keyword
-from app.providers.community._crypto import decrypt_qrc
-from app.providers.community._lyrics import merge_lrc
-from app.providers.community._qrc import extract_qrc, parse_qrc
+from ._common import BROWSER_UA, rank_score, search_keyword, to_int_seconds
+from ._crypto import decrypt_qrc
+from ._lyrics import merge_lrc
+from ._qrc import extract_qrc, parse_qrc
 
 _SEARCH = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
 _LYRIC = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg"
@@ -82,6 +82,7 @@ class QQMusicProvider(HTTPProvider):
         artist = ", ".join(s.get("name", "") for s in singers if s.get("name")) or None
         published = str(song.get("time_public") or "")
         year = published[:4] if len(published) >= 4 else None
+        duration = to_int_seconds(song.get("interval"))  # 秒
         return Candidate(
             provider=QQMusicProvider.key,
             external_id=str(song.get("mid") or song.get("songmid") or ""),
@@ -89,6 +90,7 @@ class QQMusicProvider(HTTPProvider):
             artist=artist,
             album=album_name,
             year=year,
+            duration=duration,
             score=rank_score(index),
             cover_url=_COVER.format(album_mid=album_mid) if album_mid else None,
             payload={"album_mid": album_mid, "interval": song.get("interval")},

@@ -21,6 +21,7 @@ from app.api import api_router, ws_router
 from app.core.config import get_settings
 from app.core.db import init_db, run_migrations
 from app.core.logging import get_logger, setup_logging
+from app.extensions import extension_manager
 from app.services.maintenance import purge_orphan_tracks
 from app.services.scrape_orchestrator import scrape_orchestrator
 
@@ -36,6 +37,8 @@ async def lifespan(_app: FastAPI):
         # 开发模式：启动时自动迁移，`uvicorn app.main:app` 即可跑起来
         run_migrations()
     init_db()
+    # 加载已安装的扩展（社区刮削源以可安装扩展形式提供，不再随核心内置）
+    extension_manager.load_all()
     # 清理历史上「删库未删曲目」遗留的孤儿记录（仅数据库，不动磁盘文件）
     purge_orphan_tracks()
     logger.info(

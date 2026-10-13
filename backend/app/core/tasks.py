@@ -169,21 +169,36 @@ class TaskManager:
         try:
             await runner(ctx)
         except asyncio.CancelledError:  # pragma: no cover - 由 cancel 触发
-            self._finalize(ctx.task_id, TaskStatus.cancelled)
+            await self._finalize(ctx.task_id, TaskStatus.cancelled)
             raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("task.failed", extra={"task_id": ctx.task_id})
-            self._finalize(ctx.task_id, TaskStatus.failed, error=str(exc))
+            await self._finalize(ctx.task_id, TaskStatus.failed, error=str(exc))
         else:
             status = TaskStatus.cancelled if ctx.cancelled else TaskStatus.succeeded
-            self._finalize(ctx.task_id, status)
+            await self._finalize(ctx.task_id, status)
         finally:
             self._contexts.pop(ctx.task_id, None)
             self._asyncio_tasks.pop(ctx.task_id, None)
 
-    def _finalize(self, task_id: int, status: TaskStatus, error: str | None = None) -> None:
-        self._write_task(task_id, status=str(status), error=error, finished_at=datetime.now(UTC))
+    async def _finalize(self, task_id: int, status: TaskStatus, error: str | None = None) -> None:
+        """落库最终状态并广播 ``task.finished``（前端据此刷新列表/结束进度）。"""
+        task = self._write_task(
+            task_id, status=str(status), error=error, finished_at=datetime.now(UTC)
+        )
         logger.info("task.finished", extra={"task_id": task_id, "status": str(status)})
+        await self._bus.publish(
+            {
+                "type": "task.finished",
+                "task_id": task_id,
+                "kind": task.type if task else None,
+                "status": str(status),
+                "processed": task.processed if task else 0,
+                "total": task.total if task else 0,
+                "message": task.message if task else None,
+                "error": error,
+            }
+        )
 
     async def cancel(self, task_id: int) -> bool:
         ctx = self._contexts.get(task_id)

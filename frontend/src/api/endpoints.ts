@@ -6,6 +6,8 @@ import type {
   AISettingsUpdate,
   AcoustIDSettings,
   AcoustIDSettingsUpdate,
+  ApiToken,
+  ApiTokenUpdate,
   BatchEditRequest,
   BatchPreviewResponse,
   Candidate,
@@ -13,9 +15,10 @@ import type {
   CoverAssignment,
   CoverBatchPreviewResponse,
   CoverMeta,
+  Extension,
+  ExtensionsResponse,
   Library,
   LyricsRead,
-  LyricsTranslateResponse,
   OperationLog,
   OrganizeApplyRequest,
   OrganizePreviewResponse,
@@ -33,6 +36,8 @@ import type {
   TrackFacets,
   TrackIds,
   WordLyricsResponse,
+  WordLyricsTarget,
+  WordLyricsTranslation,
 } from './types'
 
 export type TrackQuery = {
@@ -112,6 +117,7 @@ export const coverApi = {
 }
 
 export const lyricsApi = {
+  /** 读取歌词：内嵌优先，其次同名 .lrc / .nilyric */
   get: (trackId: number) => api.get<LyricsRead>(`/tracks/${trackId}/lyrics`),
   put: (trackId: number, content: string, target: 'embedded' | 'lrc' | 'both' = 'embedded') =>
     api.put<LyricsRead>(`/tracks/${trackId}/lyrics`, {
@@ -120,11 +126,21 @@ export const lyricsApi = {
       target,
       validate_lrc: false,
     }),
-  /** AI 歌词翻译：返回「原文 + 译文」双语对照 LRC（不落盘，前端确认后再写入） */
-  translate: (trackId: number, body: { target?: 'zh' | 'en' | 'ja'; content?: string }) =>
-    api.post<LyricsTranslateResponse>(`/tracks/${trackId}/lyrics/translate`, body),
-  /** 逐字歌词 → 逐字 LRC 并写入同名 .lrc（LDDC / lx-music 格式） */
-  saveWordLyrics: (trackId: number) => api.post<LyricsRead>(`/tracks/${trackId}/lyrics/word`),
+  /**
+   * 抓取逐字歌词并写入所选目标（内嵌 / 同名 .nilyric / 同名 .lrc）。
+   * translation：none=不写译文；source=仅数据源自带（默认，免费）；ai=显式调用 AI 生成（可能产生费用）。
+   */
+  saveWordLyrics: (
+    trackId: number,
+    targets: WordLyricsTarget[] = ['embedded', 'nilyric'],
+    translation: WordLyricsTranslation = 'source',
+    translateTarget: 'zh' | 'en' | 'ja' = 'zh',
+  ) =>
+    api.post<LyricsRead>(`/tracks/${trackId}/lyrics/word`, {
+      targets,
+      translation,
+      translate_target: translateTarget,
+    }),
 }
 
 export const scrapeApi = {
@@ -152,27 +168,27 @@ export const scrapeApi = {
     fields?: string[]
     apply_cover?: boolean
     apply_lyrics?: boolean
-    /** 同时抓取逐字歌词并写入 .lrc + .nilyric 同名歌词文件 */
-    write_lyrics_files?: boolean
+    /** 同时抓取逐字歌词并写入内嵌 + .lrc/.nilyric 边车文件 */
+    write_word_lyrics?: boolean
   }) => api.post<ScrapeApplyResponse>('/scrape/apply', body),
   list: (candidate: Candidate) => `${candidate.provider}:${candidate.external_id}`,
   /** F14：指纹识别（fpcalc → AcoustID → 回填 MusicBrainz），需已配置 Key */
   fingerprint: (trackId: number) =>
     api.post<ScrapeSearchResponse>('/scrape/fingerprint', { track_id: trackId }),
-  /** 批量刮削：对每首取最高分候选，达阈值自动应用（仅补空值 + 封面 + 歌词/同名歌词文件） */
+  /** 批量刮削：对每首取最高分候选，达阈值自动应用（仅补空值 + 封面 + 歌词/逐字歌词） */
   jobs: (body: {
     ids: number[]
     providers?: string[]
     only_missing?: boolean
     apply_lyrics?: boolean
-    write_lyrics_files?: boolean
+    write_word_lyrics?: boolean
   }) => api.post<TaskAccepted>('/scrape/jobs', body),
   /** 逐字歌词（只读预览，不落盘）；优先读本地 .nilyric */
   wordLyrics: (trackId: number) =>
     api.get<WordLyricsResponse>(`/scrape/word-lyrics/${trackId}`),
-  /** 批量获取逐字歌词并写入 .lrc + .nilyric 同名歌词文件（后台任务） */
-  wordLyricsBatch: (ids: number[]) =>
-    api.post<TaskAccepted>('/scrape/word-lyrics', { ids }),
+  /** 批量抓取逐字歌词并写入（内嵌 / 同名边车，默认 内嵌 + .nilyric） */
+  wordLyricsBatch: (ids: number[], targets: WordLyricsTarget[] = ['embedded', 'nilyric']) =>
+    api.post<TaskAccepted>('/scrape/word-lyrics', { ids, targets }),
 }
 
 export const logsApi = {
@@ -239,4 +255,34 @@ export const acoustidApi = {
   get: () => api.get<AcoustIDSettings>('/settings/acoustid'),
   update: (body: AcoustIDSettingsUpdate) =>
     api.patch<AcoustIDSettings>('/settings/acoustid', body),
+}
+
+/** 扩展（可安装的刮削源插件）：社区源不再内置，需先安装 */
+export const extensionApi = {
+  list: () => api.get<ExtensionsResponse>('/extensions'),
+  installFromCatalog: (key: string) => api.post<Extension>(`/extensions/catalog/${key}/install`),
+  uninstall: (key: string) =>
+    api.delete<{ key: string; removed_providers: string[] }>(`/extensions/${key}`),
+  /** 上传扩展 zip 安装（zip 内为单一顶层目录，含 extension.json） */
+  installZip: async (file: File): Promise<Extension> => {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await fetch('/api/extensions/install', { method: 'POST', body: form })
+    if (!response.ok) {
+      let detail = response.statusText
+      try {
+        detail = ((await response.json()) as { detail?: string }).detail ?? detail
+      } catch {
+        /* 忽略非 JSON */
+      }
+      throw new Error(detail)
+    }
+    return (await response.json()) as Extension
+  },
+}
+
+/** 对外 API 令牌（供外部系统集成的 /api/open/* 接口鉴权） */
+export const apiTokenApi = {
+  get: () => api.get<ApiToken>('/settings/api-token'),
+  update: (body: ApiTokenUpdate) => api.patch<ApiToken>('/settings/api-token', body),
 }

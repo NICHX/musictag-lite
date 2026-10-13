@@ -234,12 +234,6 @@ export interface LyricsRead {
   content: string | null
 }
 
-export interface LyricsTranslateResponse {
-  track_id: number
-  target: string
-  content: string
-}
-
 /** 逐字歌词（只读预览，不落盘） */
 export interface WordLyricWord {
   text: string
@@ -288,10 +282,16 @@ export interface ScrapeApplyResponse {
   lyrics_found: boolean
   /** 是否取到逐字歌词 */
   word_found: boolean
-  /** 是否写入了 .lrc / .nilyric 同名歌词文件 */
-  lyrics_files_written: boolean
+  /** 逐字歌词是否已写入（内嵌 + .lrc/.nilyric 边车） */
+  word_written: boolean
   diffs: FieldDiff[]
 }
+
+/** 最终歌词（逐字 + 若有译文）写入目标：内嵌 / 同名 .nilyric / 同名 .lrc */
+export type WordLyricsTarget = 'embedded' | 'nilyric' | 'lrc'
+
+/** 译文来源：none=不写译文；source=仅数据源自带；ai=显式调用 AI（可能产生费用） */
+export type WordLyricsTranslation = 'none' | 'source' | 'ai'
 
 /** 文件名解析（F11 的文件名 → 标签方向） */
 export interface ParsedFields {
@@ -370,6 +370,35 @@ export interface AcoustIDSettings {
 
 export interface AcoustIDSettingsUpdate {
   api_key?: string
+}
+
+/** 扩展（可安装的刮削源插件） */
+export interface Extension {
+  key: string
+  name: string
+  version: string
+  description: string | null
+  author: string | null
+  installed: boolean
+  builtin: boolean
+  providers: string[]
+}
+
+export interface ExtensionsResponse {
+  installed: Extension[]
+  catalog: Extension[]
+}
+
+/** 对外 API 令牌（管理面板可见明文，便于复制给外部系统） */
+export interface ApiToken {
+  enabled: boolean
+  token: string | null
+  base_url: string
+}
+
+export interface ApiTokenUpdate {
+  enabled?: boolean
+  regenerate?: boolean
 }
 
 /** 可编辑字段（与后端 EDITABLE_FIELDS 对齐） */

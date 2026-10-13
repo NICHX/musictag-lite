@@ -59,6 +59,7 @@ class Candidate:
     album: str | None = None
     year: str | None = None
     track_no: int | None = None
+    duration: int | None = None  # 时长（秒），用于与原曲比对、区分不同版本
     score: float = 0.0
     cover_url: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)

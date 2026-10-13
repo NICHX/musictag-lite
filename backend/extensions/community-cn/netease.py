@@ -22,14 +22,15 @@ from app.providers.base import (
     Lyrics,
     ScrapeQuery,
 )
-from app.providers.community._common import (
+from ._common import (
     BROWSER_UA,
     join_names,
     rank_score,
     search_keyword,
+    to_int_seconds,
     upgrade_https,
 )
-from app.providers.community._lyrics import merge_lrc
+from ._lyrics import merge_lrc
 
 _SEARCH = "https://music.163.com/api/cloudsearch/pc"
 _LYRIC = "https://music.163.com/api/song/lyric"
@@ -84,6 +85,7 @@ class NeteaseProvider(HTTPProvider):
     def _to_candidate(song: dict[str, Any], index: int) -> Candidate:
         album = song.get("al") or song.get("album") or {}
         artists = song.get("ar") or song.get("artists") or []
+        duration = to_int_seconds(song.get("dt") or song.get("duration"), milliseconds=True)
         return Candidate(
             provider=NeteaseProvider.key,
             external_id=str(song.get("id", "")),
@@ -91,6 +93,7 @@ class NeteaseProvider(HTTPProvider):
             artist=join_names(artists),
             album=album.get("name"),
             year=_year_from_ms(song.get("publishTime")),
+            duration=duration,
             score=rank_score(index),
             cover_url=upgrade_https(album.get("picUrl")),
             payload={"album_id": album.get("id")},

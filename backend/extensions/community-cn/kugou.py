@@ -25,13 +25,14 @@ from app.providers.base import (
     Lyrics,
     ScrapeQuery,
 )
-from app.providers.community._common import (
+from ._common import (
     BROWSER_UA,
     rank_score,
     search_keyword,
+    to_int_seconds,
     upgrade_https,
 )
-from app.providers.community._krc import KRCError, decrypt_krc, parse_krc
+from ._krc import KRCError, decrypt_krc, parse_krc
 
 _SEARCH = "https://complexsearch.kugou.com/v2/search/song"
 _KRC_SEARCH = "https://krcs.kugou.com/search"
@@ -98,6 +99,7 @@ class KugouProvider(HTTPProvider):
     def _to_candidate(song: dict[str, Any], index: int) -> Candidate:
         image = song.get("Image") or (song.get("trans_param") or {}).get("union_cover")
         cover = upgrade_https(str(image).replace("{size}", _COVER_SIZE)) if image else None
+        duration = to_int_seconds(song.get("Duration"))  # 秒
         return Candidate(
             provider=KugouProvider.key,
             external_id=str(song.get("FileHash", "")),
@@ -105,6 +107,7 @@ class KugouProvider(HTTPProvider):
             artist=song.get("SingerName"),
             album=song.get("AlbumName"),
             year=None,
+            duration=duration,
             score=rank_score(index),
             cover_url=cover,
             payload={"album_id": song.get("AlbumID"), "duration": song.get("Duration")},

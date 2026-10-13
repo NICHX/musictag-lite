@@ -1,0 +1,12 @@
+{
+  "key": "community-cn",
+  "name": "国内音乐平台源",
+  "version": "1.0.0",
+  "description": "网易云音乐 / QQ 音乐 / 酷狗音乐的非官方接口源，含逐字歌词。默认关闭，需在设置中启用并自行承担合规责任。",
+  "author": "MusicTag Lite 社区",
+  "providers": [
+    "netease.NeteaseProvider",
+    "qqmusic.QQMusicProvider",
+    "kugou.KugouProvider"
+  ]
+}

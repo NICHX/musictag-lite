@@ -32,6 +32,9 @@ SortField = Literal[
 SortOrder = Literal["asc", "desc"]
 BatchOpKind = Literal["set", "fill_empty", "append", "replace", "zh_convert"]
 BatchSource = Literal["manual", "batch", "scrape"]
+# 最终歌词（逐字 + 若有译文）写入目标：内嵌 / 同名 .nilyric / 同名 .lrc
+WordLyricsTarget = Literal["embedded", "nilyric", "lrc"]
+_WORD_TARGETS_DEFAULT = ["embedded", "nilyric"]
 
 
 # --------------------------------------------------------------------------- #
@@ -238,19 +241,6 @@ class LyricsWriteRequest(BaseModel):
     validate_lrc: bool = True
 
 
-class LyricsTranslateRequest(BaseModel):
-    """AI 歌词翻译：省略 ``content`` 时读取文件中的现有歌词。"""
-
-    target: Literal["zh", "en", "ja"] = "zh"
-    content: str | None = None
-
-
-class LyricsTranslateResponse(BaseModel):
-    track_id: int
-    target: str
-    content: str  # 原文 + 译文 的双语对照 LRC
-
-
 class WordLyricWord(BaseModel):
     text: str
     offset: int = 0  # 相对行首的毫秒偏移
@@ -274,9 +264,26 @@ class WordLyricsResponse(BaseModel):
 
 
 class WordLyricsBatchRequest(BaseModel):
-    """批量获取逐字歌词并写入边车文件。"""
+    """批量抓取逐字歌词并写入所选目标（不含 AI 翻译，避免批量场景产生费用）。"""
 
     ids: list[int] = Field(min_length=1)
+    targets: list[WordLyricsTarget] = Field(default_factory=lambda: list(_WORD_TARGETS_DEFAULT))
+    translation: Literal["none", "source"] = Field(
+        default="source", description="译文来源：none=不写译文；source=仅用数据源自带译文"
+    )
+
+
+class WordLyricsWriteRequest(BaseModel):
+    """逐字歌词写入目标：内嵌 / 同名 .nilyric / 同名 .lrc（可多选）。"""
+
+    targets: list[WordLyricsTarget] = Field(default_factory=lambda: list(_WORD_TARGETS_DEFAULT))
+    translation: Literal["none", "source", "ai"] = Field(
+        default="source",
+        description="译文来源：none=不写译文；source=仅用数据源自带译文；ai=显式调用 AI 生成（可能产生费用）",
+    )
+    translate_target: Literal["zh", "en", "ja"] = Field(
+        default="zh", description="translation=ai 时，AI 译文的目标语言"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -335,9 +342,9 @@ class ScrapeApplyRequest(BaseModel):
     )
     apply_cover: bool = False
     apply_lyrics: bool = False
-    write_lyrics_files: bool = Field(
+    write_word_lyrics: bool = Field(
         default=False,
-        description="是否同时抓取逐字歌词并写入 .lrc + .nilyric 边车文件",
+        description="是否同时抓取逐字歌词并写入内嵌 + .lrc/.nilyric 边车文件",
     )
 
 
@@ -348,7 +355,7 @@ class ScrapeApplyResponse(BaseModel):
     lyrics_applied: bool = False
     lyrics_found: bool = False
     word_found: bool = False
-    lyrics_files_written: bool = False
+    word_written: bool = False
     diffs: list[FieldDiff] = Field(default_factory=list)
 
 
@@ -368,6 +375,41 @@ class ProviderUpdate(BaseModel):
     enabled: bool | None = None
     priority: int | None = None
     options: dict[str, Any] | None = None
+
+
+# --------------------------------------------------------------------------- #
+# 扩展（可安装的刮削源插件）
+# --------------------------------------------------------------------------- #
+class ExtensionRead(BaseModel):
+    key: str
+    name: str
+    version: str = "0.0.0"
+    description: str | None = None
+    author: str | None = None
+    installed: bool = False
+    builtin: bool = False
+    providers: list[str] = Field(default_factory=list)
+
+
+class ExtensionsRead(BaseModel):
+    installed: list[ExtensionRead] = Field(default_factory=list)
+    catalog: list[ExtensionRead] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# 对外 API 访问令牌
+# --------------------------------------------------------------------------- #
+class ApiTokenRead(BaseModel):
+    """对外 API 令牌配置（管理面板可见明文，便于复制给外部系统）。"""
+
+    enabled: bool = True
+    token: str | None = None
+    base_url: str = "/api/open"
+
+
+class ApiTokenUpdate(BaseModel):
+    enabled: bool | None = None
+    regenerate: bool = Field(default=False, description="是否重新生成令牌")
 
 
 # --------------------------------------------------------------------------- #
@@ -611,7 +653,7 @@ class ScrapeJobCreateRequest(BaseModel):
     providers: list[str] | None = None
     only_missing: bool = True
     apply_lyrics: bool = True
-    write_lyrics_files: bool = True
+    write_word_lyrics: bool = True
 
 
 class ScrapeJobRead(BaseModel):

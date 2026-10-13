@@ -2,12 +2,14 @@
 import { computed, onMounted, ref } from 'vue'
 
 import { api } from '@/api/client'
-import { acoustidApi, aiApi } from '@/api/endpoints'
+import { acoustidApi, aiApi, apiTokenApi, extensionApi } from '@/api/endpoints'
 import type {
   AISettings,
   AISettingsUpdate,
   AcoustIDSettings,
   AcoustIDSettingsUpdate,
+  ApiToken,
+  Extension,
   Health,
   Library,
   Provider,
@@ -32,6 +34,18 @@ const acoustidKey = ref('')
 const acoustidSaving = ref(false)
 const acoustidMessage = ref<string | null>(null)
 
+const installedExtensions = ref<Extension[]>([])
+const catalogExtensions = ref<Extension[]>([])
+const extensionBusy = ref(false)
+const extensionMessage = ref<string | null>(null)
+const zipInput = ref<HTMLInputElement | null>(null)
+
+const token = ref<ApiToken | null>(null)
+const tokenSaving = ref(false)
+const tokenMessage = ref<string | null>(null)
+const tokenRevealed = ref(false)
+const tokenCopied = ref(false)
+
 function syncAiForm(data: AISettings): void {
   ai.value = data
   aiForm.value = { enabled: data.enabled, base_url: data.base_url, model: data.model, api_key: '' }
@@ -40,22 +54,110 @@ function syncAiForm(data: AISettings): void {
 async function load(): Promise<void> {
   error.value = null
   try {
-    const [libs, provs, status, aiSettings, acoustidSettings] = await Promise.all([
+    const [libs, provs, status, aiSettings, acoustidSettings, exts, apiToken] = await Promise.all([
       api.get<Library[]>('/libraries'),
       api.get<Provider[]>('/providers'),
       api.get<Health>('/health'),
       aiApi.get(),
       acoustidApi.get(),
+      extensionApi.list(),
+      apiTokenApi.get(),
     ])
     libraries.value = libs
     providers.value = provs
     health.value = status
     syncAiForm(aiSettings)
     acoustid.value = acoustidSettings
+    installedExtensions.value = exts.installed
+    catalogExtensions.value = exts.catalog
+    token.value = apiToken
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载失败'
   }
 }
+
+function applyExtensions(list: { installed: Extension[]; catalog: Extension[] }): void {
+  installedExtensions.value = list.installed
+  catalogExtensions.value = list.catalog
+}
+
+async function installExtension(key: string): Promise<void> {
+  extensionBusy.value = true
+  error.value = null
+  extensionMessage.value = null
+  try {
+    const info = await extensionApi.installFromCatalog(key)
+    extensionMessage.value = `已安装扩展「${info.name}」，到「刮削源」中启用即可使用`
+    applyExtensions(await extensionApi.list())
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '安装失败'
+  } finally {
+    extensionBusy.value = false
+  }
+}
+
+async function uninstallExtension(key: string): Promise<void> {
+  extensionBusy.value = true
+  error.value = null
+  extensionMessage.value = null
+  try {
+    await extensionApi.uninstall(key)
+    extensionMessage.value = '已卸载扩展'
+    applyExtensions(await extensionApi.list())
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '卸载失败'
+  } finally {
+    extensionBusy.value = false
+  }
+}
+
+async function onZipSelected(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  extensionBusy.value = true
+  error.value = null
+  extensionMessage.value = null
+  try {
+    const info = await extensionApi.installZip(file)
+    extensionMessage.value = `已安装扩展「${info.name}」`
+    applyExtensions(await extensionApi.list())
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '安装失败'
+  } finally {
+    extensionBusy.value = false
+  }
+}
+
+async function saveToken(body: { enabled?: boolean; regenerate?: boolean }): Promise<void> {
+  tokenSaving.value = true
+  error.value = null
+  tokenMessage.value = null
+  try {
+    token.value = await apiTokenApi.update(body)
+    tokenMessage.value = body.regenerate ? '已重新生成令牌' : '已保存'
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '保存失败'
+  } finally {
+    tokenSaving.value = false
+  }
+}
+
+async function copyToken(): Promise<void> {
+  if (!token.value?.token) return
+  try {
+    await navigator.clipboard.writeText(token.value.token)
+    tokenCopied.value = true
+    window.setTimeout(() => (tokenCopied.value = false), 1500)
+  } catch {
+    error.value = '复制失败，请手动选择复制'
+  }
+}
+
+const openApiBase = computed(() =>
+  token.value ? `${window.location.origin}${token.value.base_url}` : '',
+)
 
 async function saveAi(extra: AISettingsUpdate = {}): Promise<void> {
   aiSaving.value = true
@@ -233,7 +335,7 @@ onMounted(load)
       <section class="mb-4 break-inside-avoid rounded-card border border-border bg-surface p-4">
         <h2 class="text-base font-medium">刮削源</h2>
         <p class="mt-1 text-xs text-muted">
-          默认仅启用开放数据源；高风险源不内置，以社区插件形式提供。
+          默认仅启用开放数据源；高风险源不内置，以「扩展」形式提供，安装后在此启用。
           <span class="text-muted">按住右侧手柄拖动排序</span>：越靠前越先使用，同时决定元数据检索顺序与歌词回退顺序。
         </p>
 
@@ -287,6 +389,96 @@ onMounted(load)
             </span>
           </li>
         </ul>
+      </section>
+
+      <section class="mb-4 break-inside-avoid rounded-card border border-border bg-surface p-4">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="text-base font-medium">扩展</h2>
+            <p class="mt-1 text-xs text-muted">
+              刮削源以可安装「扩展」形式分发：安装后在「刮削源」中启用即可使用。卸载会同时移除其数据源与配置。
+            </p>
+          </div>
+          <button
+            type="button"
+            class="shrink-0 rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-brand hover:text-text disabled:opacity-50"
+            :disabled="extensionBusy"
+            @click="zipInput?.click()"
+          >
+            上传安装
+          </button>
+          <input ref="zipInput" type="file" accept=".zip" class="hidden" @change="onZipSelected" />
+        </div>
+
+        <ul class="mt-3 divide-y divide-border/60">
+          <li
+            v-for="ext in catalogExtensions"
+            :key="ext.key"
+            class="flex items-start gap-3 py-2.5 text-sm"
+          >
+            <span class="min-w-0 flex-1">
+              <span class="flex items-center gap-2">
+                <span class="block truncate">{{ ext.name }}</span>
+                <span class="font-mono text-xs text-muted">v{{ ext.version }}</span>
+                <span
+                  v-if="ext.installed"
+                  class="rounded-full border border-brand/40 bg-brand/10 px-1.5 py-0.5 text-[10px] text-brand"
+                >
+                  已安装
+                </span>
+              </span>
+              <span v-if="ext.description" class="mt-0.5 block text-xs text-muted">
+                {{ ext.description }}
+              </span>
+            </span>
+            <button
+              v-if="!ext.installed"
+              type="button"
+              class="shrink-0 rounded-control bg-brand px-2.5 py-1 text-xs font-medium text-bg transition-colors hover:bg-brand-600 disabled:opacity-50"
+              :disabled="extensionBusy"
+              @click="installExtension(ext.key)"
+            >
+              安装
+            </button>
+            <button
+              v-else
+              type="button"
+              class="shrink-0 rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-danger/60 hover:text-danger disabled:opacity-50"
+              :disabled="extensionBusy"
+              @click="uninstallExtension(ext.key)"
+            >
+              卸载
+            </button>
+          </li>
+          <li v-if="!catalogExtensions.length" class="py-3 text-sm text-muted">暂无可安装扩展。</li>
+        </ul>
+
+        <ul
+          v-if="installedExtensions.some((item) => !item.builtin)"
+          class="mt-2 divide-y divide-border/60"
+        >
+          <li
+            v-for="ext in installedExtensions.filter((item) => !item.builtin)"
+            :key="ext.key"
+            class="flex items-center gap-3 py-2 text-sm"
+          >
+            <span class="min-w-0 flex-1">
+              <span class="block truncate">{{ ext.name }}</span>
+              <span class="block truncate font-mono text-xs text-muted">
+                {{ ext.key }} · {{ ext.providers.join(' / ') || '—' }}
+              </span>
+            </span>
+            <button
+              type="button"
+              class="shrink-0 rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-danger/60 hover:text-danger disabled:opacity-50"
+              :disabled="extensionBusy"
+              @click="uninstallExtension(ext.key)"
+            >
+              卸载
+            </button>
+          </li>
+        </ul>
+        <p v-if="extensionMessage" class="mt-2 text-xs text-success">{{ extensionMessage }}</p>
       </section>
 
       <section class="mb-4 break-inside-avoid rounded-card border border-border bg-surface p-4">
@@ -430,6 +622,86 @@ onMounted(load)
         <p class="mt-2 text-xs text-muted">
           在「刮削源」中启用 AcoustID 后，刮削搜索无命中时会自动用指纹兜底；也可在刮削页手动点「指纹识别」。
         </p>
+      </section>
+
+      <section class="mb-4 break-inside-avoid rounded-card border border-border bg-surface p-4">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="text-base font-medium">对外 API</h2>
+            <p class="mt-1 text-xs text-muted">
+              供外部系统（Navidrome / 脚本 / 自建前端 / 智能音箱等）集成的接口，统一前缀
+              <span class="font-mono">/api/open</span>：开放浏览、匹配（发起检索 / 返回候选 / 写入结果）
+              与单条写入；库管理、数据源配置、批量任务等不开放。所有请求需携带下方 Token。
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            :aria-checked="token?.enabled ?? false"
+            aria-label="启用对外 API"
+            class="relative mt-1 h-5 w-9 shrink-0 rounded-full border transition-colors"
+            :class="token?.enabled ? 'border-brand bg-brand/30' : 'border-border bg-surface-2'"
+            :disabled="tokenSaving"
+            @click="saveToken({ enabled: !token?.enabled })"
+          >
+            <span
+              class="absolute top-0.5 h-3.5 w-3.5 rounded-full transition-all"
+              :class="token?.enabled ? 'left-4 bg-brand' : 'left-0.5 bg-muted'"
+            />
+          </button>
+        </div>
+
+        <label class="mt-4 flex flex-col gap-1 text-xs text-muted">
+          API Token
+          <div class="flex items-center gap-2">
+            <input
+              :type="tokenRevealed ? 'text' : 'password'"
+              readonly
+              :value="token?.token ?? ''"
+              class="min-w-0 flex-1 rounded-control border border-border bg-bg px-2.5 py-1.5 font-mono text-sm text-text outline-none"
+            />
+            <button
+              type="button"
+              class="shrink-0 rounded-control border border-border px-2.5 py-1.5 text-xs text-muted transition-colors hover:border-brand hover:text-text"
+              @click="tokenRevealed = !tokenRevealed"
+            >
+              {{ tokenRevealed ? '隐藏' : '显示' }}
+            </button>
+            <button
+              type="button"
+              class="shrink-0 rounded-control border border-border px-2.5 py-1.5 text-xs text-muted transition-colors hover:border-brand hover:text-text"
+              @click="copyToken()"
+            >
+              {{ tokenCopied ? '已复制' : '复制' }}
+            </button>
+          </div>
+        </label>
+
+        <p class="mt-3 text-xs text-muted">
+          接口地址：<span class="font-mono">{{ openApiBase }}</span> ·
+          <a href="/docs" target="_blank" rel="noopener" class="text-brand hover:underline">
+            接口文档
+          </a>
+        </p>
+        <p class="mt-1 text-xs text-muted">
+          用法：请求头 <span class="font-mono">Authorization: Bearer &lt;token&gt;</span>
+          或 <span class="font-mono">X-API-Token: &lt;token&gt;</span>
+        </p>
+
+        <div class="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            class="rounded-control border border-border px-3 py-1.5 text-sm text-muted transition-colors hover:border-danger/60 hover:text-danger disabled:opacity-50"
+            :disabled="tokenSaving"
+            @click="saveToken({ regenerate: true })"
+          >
+            重新生成令牌
+          </button>
+          <span v-if="tokenMessage" class="text-xs text-success">{{ tokenMessage }}</span>
+          <span class="ml-auto text-xs" :class="token?.enabled ? 'text-success' : 'text-muted'">
+            {{ token?.enabled ? '已启用' : '已停用' }}
+          </span>
+        </div>
       </section>
 
       <section class="mb-4 break-inside-avoid rounded-card border border-border bg-surface p-4">

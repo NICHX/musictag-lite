@@ -18,6 +18,9 @@ export const useTaskStore = defineStore('tasks', () => {
   const tasks = ref<Task[]>([])
   const connected = ref(false)
   const lastEvent = ref<Record<string, unknown> | null>(null)
+  /** 最近一次完成的任务事件；`completed` 为其计数（供各视图 watch 后刷新）。 */
+  const lastFinished = ref<TaskProgressEvent | null>(null)
+  const completed = ref(0)
   let socket: WebSocket | null = null
 
   async function refresh(): Promise<void> {
@@ -32,9 +35,16 @@ export const useTaskStore = defineStore('tasks', () => {
         connected.value = true
         return
       }
-      const progress = event as TaskProgressEvent
-      if ((progress.type === 'task.progress' || progress.type === 'task.started') && progress.task_id) {
-        applyEvent(progress)
+      const evt = event as TaskProgressEvent
+      if (evt.type === 'task.finished' && evt.task_id) {
+        applyEvent(evt)
+        lastFinished.value = evt
+        completed.value += 1
+        void refresh()
+        return
+      }
+      if ((evt.type === 'task.progress' || evt.type === 'task.started') && evt.task_id) {
+        applyEvent(evt)
       }
     })
     socket.addEventListener('close', () => {
@@ -63,5 +73,5 @@ export const useTaskStore = defineStore('tasks', () => {
     connected.value = false
   }
 
-  return { tasks, connected, lastEvent, refresh, connect, disconnect }
+  return { tasks, connected, lastEvent, lastFinished, completed, refresh, connect, disconnect }
 })

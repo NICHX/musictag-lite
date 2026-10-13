@@ -16,12 +16,14 @@
 .
 ├─ backend/            # FastAPI 应用
 │  ├─ app/
-│  │  ├─ api/          # 路由（REST 契约）
+│  │  ├─ api/          # 路由（REST 契约，含对外 /api/open）
 │  │  ├─ core/         # 配置 / DB / 事件 / 任务 / 安全 / 日志
 │  │  ├─ models/       # SQLModel 模型与 Pydantic schema
 │  │  ├─ audio/        # 音频 IO 抽象（mutagen）
-│  │  ├─ providers/    # 刮削插件（builtin / community）
+│  │  ├─ extensions/   # 扩展体系（动态加载 / 安装 / 卸载）
+│  │  ├─ providers/    # 刮削源（builtin；社区源以可安装扩展提供）
 │  │  └─ services/     # 领域服务
+│  ├─ extensions/      # 可安装扩展目录（内置 catalog，如 community-cn）
 │  ├─ alembic/         # 数据库迁移
 │  ├─ tests/           # pytest
 │  ├─ pyproject.toml
@@ -68,18 +70,25 @@ cd frontend && npm run test
 
 ## 歌词
 
-歌词来源分两类**分别记录**，便于筛选与展示：
+歌词只有一种最终产物 —— **逐字 LRC**（数据源或 AI 提供译文时，即「逐字 + 译文」），可写入：
 
-- **内嵌歌词**：写在音频文件的标签容器里；
-- **同名歌词文件**：与音频同名的 `.lrc`（标准逐行）与 `.nilyric`（逐字，含字级时间轴）。
+| 目标 | 位置 |
+| --- | --- |
+| 内嵌 | 音频标签容器 |
+| 同名 `.nilyric` | 逐字（含字级时间轴） |
+| 同名 `.lrc` | 通用 |
 
-资源库按「是否有词」合并筛选（`无歌词`），详情页则分别显示来源（内嵌 / 同名文件 / 逐字）。
+检查器「歌词」区：
 
-**逐字歌词**：在支持逐字的源（酷狗 / QQ 音乐，需在「设置 → 数据源」启用）抓取后，可预览并一键写入
-`.lrc` + `.nilyric` 两个同名文件（逐字需支持该标记的播放器）；也可在底部批量条对所选曲目批量抓取。
+- **预览逐字**：从数据源预览逐字歌词（只读）；
+- **写入位置**：内嵌 + `.nilyric`（默认）/ 内嵌 + `.lrc` / 仅内嵌 / 仅 `.nilyric` / 仅 `.lrc`；
+- **译文来源**：`无译文` / `译文·数据源`（默认，免费）/ `译文·AI`（显式选择，**可能产生费用**；未配置 AI 时不可选）；
+- **抓取并写入**：抓取逐字歌词并写入所选位置。
 
-**AI 双语翻译**：在检查器里选择目标语言（中文 / English / 日本語）后，由模型生成「原文 + 译文」
-对照的标准 LRC，确认后再写入。复用「可选 AI 辅助」的配置，默认关闭、仅手动触发，只发送歌词文本。
+**AI 默认不参与**：只有显式选「译文·AI」才会调用模型——逐字写入与批量抓取**都不会**自动调用 AI。
+数据源（网易云 / QQ）的歌词接口本就合并了译文，选「译文·数据源」即可免费并入；不需要译文的歌选「无译文」。
+下方只读展示当前歌词。批量场景用资源库底部的「逐字歌词」按钮（写内嵌 + `.nilyric`，仅用数据源译文）；
+它是**后台任务**，进度见任务中心，完成后列表会自动刷新。
 
 ## 文件名识别与可选 AI 辅助
 
@@ -149,6 +158,54 @@ APP_SECRET_KEY=$(openssl rand -hex 32) MUSIC_PATH=/path/to/music docker compose 
 
 访问 <http://localhost:8000>。曲库挂载为 `/music`，数据落在 `./data`。
 
+## 扩展（可安装的刮削源）
+
+刮削源以**扩展**形式分发：社区源（网易云 / QQ 音乐 / 酷狗）不再随核心代码内置，而是打包为
+可安装扩展（`backend/extensions/community-cn/`，随镜像分发的内置 catalog）。在
+**设置 → 扩展** 中一键安装或上传 zip 安装；安装后其 Provider 会动态注册，出现在
+「刮削源」列表中（默认关闭，需手动启用）。卸载会注销 Provider 并清理其配置。
+
+- 扩展目录：已安装扩展存放于 `<DATA_DIR>/extensions/<key>/`（随数据卷持久化）。
+- 扩展包结构：目录内含 `extension.json` 清单（`key` / `name` / `version` / `providers`）
+  与 Provider 模块（模块内用相对导入引用同目录工具模块）。
+- 接口：`GET /api/extensions`、`POST /api/extensions/catalog/{key}/install`、
+  `POST /api/extensions/install`（上传 zip）、`DELETE /api/extensions/{key}`。
+
+## 对外 API（Token 鉴权）
+
+供外部系统（Navidrome / 脚本 / 自建前端 / 智能音箱等）集成的接口挂在 **`/api/open`**，
+开放**核心功能白名单**（浏览 + 匹配 + 单条写入）；管理类与重型接口不开放
+（库增删改/扫描、数据源配置、批量编辑、封面替换、整理/转码、任务日志、扩展、设置等仅内部 SPA 使用）。
+
+| 分组 | 端点 | 说明 |
+| --- | --- | --- |
+| 浏览 | `GET /api/open/health` · `/version` | 健康检查 / 版本 |
+| 浏览 | `GET /api/open/libraries` | 音乐库列表 |
+| 浏览 | `GET /api/open/providers` | 数据源列表（含启用状态，便于选择匹配源） |
+| 浏览 | `GET /api/open/tracks` · `/ids` · `/facets` | 曲目列表 / 命中 id / 聚合计数 |
+| 浏览 | `GET /api/open/tracks/{id}` | 曲目详情 |
+| 浏览 | `GET /api/open/tracks/{id}/cover` · `/lyrics` · `/stream` | 封面 / 歌词 / 音频流（Range） |
+| 匹配 | `POST /api/open/scrape/search` | 发起检索，返回候选（按 track_id 或自定义 query） |
+| 匹配 | `POST /api/open/scrape/fingerprint` | 指纹识别（fpcalc → AcoustID → MusicBrainz） |
+| 匹配 | `POST /api/open/scrape/apply` | 写入匹配结果（标签/封面/歌词，可仅补空值） |
+| 写入 | `PATCH /api/open/tracks/{id}` | 单条标签编辑（落盘） |
+| 写入 | `PUT /api/open/tracks/{id}/lyrics` | 歌词写入（内嵌 / .lrc / 两者） |
+
+所有请求需携带令牌：
+
+```bash
+# 发起匹配 → 返回候选
+curl -H "X-API-Token: <token>" -H "Content-Type: application/json" \
+  -d '{"track_id": 12, "limit": 10}' http://<host>:8000/api/open/scrape/search
+
+# 写入匹配结果
+curl -H "X-API-Token: <token>" -H "Content-Type: application/json" \
+  -d '{"track_id": 12, "candidate_ids": ["musicbrainz:rec-1"], "only_missing": true, "apply_cover": true}' \
+  http://<host>:8000/api/open/scrape/apply
+```
+
+令牌在 **设置 → 对外 API** 中查看/复制/重新生成，可一键停用。首次访问设置页时自动生成。
+
 ## 阶段说明
 
 - **M0 脚手架**（已完成）：工程结构、API 契约、DB 迁移、Docker 最小镜像。
@@ -156,7 +213,7 @@ APP_SECRET_KEY=$(openssl rand -hex 32) MUSIC_PATH=/path/to/music docker compose 
   歌词读写、在线刮削（MusicBrainz + Cover Art Archive + LRCLIB）、操作日志、任务进度推送。
   全链路**不依赖 ffmpeg**。
 - **M2 增强（P1）**（已完成）：试听（Range 流式）、文件名↔标签互转、查找替换、繁简转换、智能整理、
-  多源兜底（网易云 / QQ 音乐 / 酷狗，社区源**默认关闭**）、封面批处理、AcoustID 指纹识别、
+  多源兜底（网易云 / QQ 音乐 / 酷狗，以**可安装扩展**提供、默认关闭）、封面批处理、AcoustID 指纹识别、
   逐字歌词（预览 + 落盘 `.lrc`/`.nilyric`）、AI 歌词双语翻译、刮削响应 TTL 缓存、跨页「选择全部」批量。
 - **M3 重型（P2）**：ffmpeg 转码、CUE 分轨、播放统计、多用户与权限。
 

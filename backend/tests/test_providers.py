@@ -152,6 +152,49 @@ def test_scoring_prefers_similar_candidate() -> None:
     assert score_candidate(good, query) <= 1.0
 
 
+def test_scoring_demotes_cover_version() -> None:
+    """同名不同歌手的翻唱，即使平台名次更高，也应低于原唱。"""
+    query = ScrapeQuery(title="夜曲", artist="周杰伦", duration=227)
+    original = Candidate(
+        provider="netease",
+        external_id="1",
+        title="夜曲",
+        artist="周杰伦",
+        album="十一月的萧邦",
+        duration=227,
+        score=0.9,
+    )
+    cover = Candidate(
+        provider="netease",
+        external_id="2",
+        title="夜曲",
+        artist="某翻唱歌手",
+        album="翻唱合集",
+        duration=240,
+        score=1.0,  # 平台第 1 名也不能压过原唱
+    )
+    assert score_candidate(original, query) > score_candidate(cover, query)
+
+
+def test_scoring_demotes_version_markers() -> None:
+    """标题带 Live/翻唱/伴奏 等版本标记时应降级（用户未主动检索该版本时）。"""
+    query = ScrapeQuery(title="告白气球", artist="周杰伦")
+    studio = Candidate(
+        provider="qqmusic", external_id="a", title="告白气球", artist="周杰伦", score=0.8
+    )
+    live = Candidate(
+        provider="qqmusic", external_id="b", title="告白气球 (Live)", artist="周杰伦", score=1.0
+    )
+    assert score_candidate(studio, query) > score_candidate(live, query)
+
+
+def test_scoring_penalizes_duration_mismatch() -> None:
+    query = ScrapeQuery(title="X", artist="A", duration=200)
+    same = Candidate(provider="p", external_id="1", title="X", artist="A", duration=200, score=0.8)
+    diff = Candidate(provider="p", external_id="2", title="X", artist="A", duration=120, score=0.8)
+    assert score_candidate(same, query) > score_candidate(diff, query)
+
+
 def test_build_query_strips_filename_noise(track_factory) -> None:
     from app.services.scrape_orchestrator import ScrapeOrchestrator
 

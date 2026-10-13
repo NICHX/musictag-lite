@@ -80,9 +80,17 @@ class Settings(BaseSettings):
     database_url: str | None = None  # 留空则推导为 SQLite(data_dir/musictag.db)
     music_root: str | None = None  # Docker 场景的默认库根目录（/music）
 
+    # ---- 扩展（可安装的刮削源插件）----
+    extensions_dir: Path | None = None  # 已安装扩展目录；留空则推导为 data_dir/extensions
+    builtin_extensions_dir: Path = BACKEND_DIR / "extensions"  # 随镜像分发的可安装扩展目录
+
     # ---- 前端静态资源（生产单镜像托管）----
     serve_frontend: bool = True
     frontend_dist: Path = BACKEND_DIR.parent / "frontend" / "dist"
+
+    # ---- 接口文档 ----
+    # /docs 是否公开内部 /api/*（默认仅公开对外 /api/open，避免暴露全部内部接口）
+    docs_include_internal: bool = False
 
     # ---- 扫描 ----
     scan_extensions: set[str] = Field(default_factory=lambda: set(DEFAULT_SCAN_EXTENSIONS))
@@ -142,6 +150,11 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment.lower() in {"production", "prod"}
+
+    @property
+    def installed_extensions_dir(self) -> Path:
+        """已安装扩展的存放目录（默认 ``data_dir/extensions``）。"""
+        return self.extensions_dir or (self.data_dir / "extensions")
 
     def ensure_data_dir(self) -> Path:
         """确保数据目录存在并返回。"""

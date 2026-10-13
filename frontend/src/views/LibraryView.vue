@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import CoverLightbox from '@/components/CoverLightbox.vue'
@@ -18,6 +18,14 @@ const router = useRouter()
 const store = useLibraryStore()
 const tasks = useTaskStore()
 const ui = useUiStore()
+
+/** 后台任务（扫描 / 批量编辑 / 刮削 / 逐字歌词等）完成后自动刷新当前列表。 */
+watch(
+  () => tasks.completed,
+  () => {
+    void store.load()
+  },
+)
 
 const keyword = ref('')
 /** 小屏默认封面墙（表格列多，横向滚动体验差）。 */

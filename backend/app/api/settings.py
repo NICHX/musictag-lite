@@ -16,10 +16,12 @@ from app.models.schemas import (
     AcoustIDSettingsUpdate,
     AISettingsRead,
     AISettingsUpdate,
+    ApiTokenRead,
+    ApiTokenUpdate,
     SettingsRead,
     SettingsUpdate,
 )
-from app.services import acoustid_config, ai_config
+from app.services import acoustid_config, ai_config, api_token
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -123,3 +125,27 @@ def update_acoustid_settings(
     if "api_key" in payload.model_fields_set:
         acoustid_config.update(session, api_key=payload.api_key)
     return _acoustid_read(session)
+
+
+def _api_token_read(session: Session) -> ApiTokenRead:
+    config = api_token.ensure(session)
+    return ApiTokenRead(
+        enabled=config.enabled,
+        token=config.token,
+        base_url="/api/open",
+    )
+
+
+@router.get("/api-token", response_model=ApiTokenRead)
+def get_api_token(session: Session = Depends(get_session)) -> ApiTokenRead:
+    """读取对外 API 令牌（首次访问自动生成；管理面板可见明文）。"""
+    return _api_token_read(session)
+
+
+@router.patch("/api-token", response_model=ApiTokenRead)
+def update_api_token(
+    payload: ApiTokenUpdate, session: Session = Depends(get_session)
+) -> ApiTokenRead:
+    """更新对外 API 令牌：可启用/停用，或重新生成（``regenerate=true``）。"""
+    api_token.update(session, enabled=payload.enabled, regenerate=payload.regenerate)
+    return _api_token_read(session)

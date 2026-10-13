@@ -4,7 +4,14 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import CoverLightbox from '@/components/CoverLightbox.vue'
 import SeekBar from '@/components/SeekBar.vue'
 import { coverApi, filenameApi, logsApi, lyricsApi, scrapeApi, systemApi, trackApi } from '@/api/endpoints'
-import type { OperationLog, ParseFilenameResponse, Track, WordLyricLine } from '@/api/types'
+import type {
+  OperationLog,
+  ParseFilenameResponse,
+  Track,
+  WordLyricLine,
+  WordLyricsTarget,
+  WordLyricsTranslation,
+} from '@/api/types'
 import { extractAccent } from '@/lib/accent'
 import { formatBitrate, formatDateTime, formatDuration, formatSize } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
@@ -57,11 +64,9 @@ const TAGS: { key: string; label: string; mono?: boolean }[] = [
 const track = ref<Track | null>(null)
 const form = ref<Record<string, string>>({})
 const lyrics = ref('')
-const lyricsSource = ref<string | null>(null)
 const logs = ref<OperationLog[]>([])
 const loading = ref(false)
 const saving = ref(false)
-const savingLyrics = ref(false)
 const uploading = ref(false)
 const message = ref<string | null>(null)
 const error = ref<string | null>(null)
@@ -72,13 +77,24 @@ const parsing = ref(false)
 const parsed = ref<ParseFilenameResponse | null>(null)
 const aiAvailable = ref(false)
 
-// ---- 歌词：AI 双语翻译 + 逐字预览（只读）----
-const translateTarget = ref<'zh' | 'en' | 'ja'>('zh')
-const translating = ref(false)
+// ---- 歌词：逐字（含译文）预览 + 写入 ----
 const wordLyrics = ref<WordLyricLine[] | null>(null)
 const wordSource = ref<string | null>(null)
 const wordLoading = ref(false)
 const savingWord = ref(false)
+/** 最终歌词写入目标（内嵌 / 同名边车） */
+const writeTargets = ref<'both-nilyric' | 'both-lrc' | 'embedded' | 'nilyric' | 'lrc'>(
+  'both-nilyric',
+)
+/** 译文来源：默认「数据源自带」——不会调用 AI、不产生费用 */
+const writeTranslation = ref<WordLyricsTranslation>('source')
+const WRITE_TARGET_MAP: Record<string, WordLyricsTarget[]> = {
+  'both-nilyric': ['embedded', 'nilyric'],
+  'both-lrc': ['embedded', 'lrc'],
+  embedded: ['embedded'],
+  nilyric: ['nilyric'],
+  lrc: ['lrc'],
+}
 
 let capabilitiesPromise: Promise<void> | null = null
 
@@ -201,7 +217,6 @@ async function load(id: number): Promise<void> {
       logsApi.list({ track_id: id, page_size: 10 }).catch(() => null),
     ])
     lyrics.value = lyric?.content ?? ''
-    lyricsSource.value = lyric?.source ?? null
     logs.value = logPage?.items ?? []
 
     if (data.has_cover) {
@@ -244,26 +259,6 @@ async function save(): Promise<void> {
   }
 }
 
-/** AI 双语翻译：结果写回文本框，确认后再点「写入内嵌」。 */
-async function onTranslate(): Promise<void> {
-  if (!track.value) return
-  translating.value = true
-  error.value = null
-  message.value = null
-  try {
-    const result = await lyricsApi.translate(track.value.id, {
-      target: translateTarget.value,
-      content: lyrics.value || undefined,
-    })
-    lyrics.value = result.content
-    message.value = '已生成双语对照歌词，确认后点「写入内嵌」'
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '翻译失败'
-  } finally {
-    translating.value = false
-  }
-}
-
 /** 逐字歌词预览（只读，不落盘）。 */
 async function toggleWordLyrics(): Promise<void> {
   if (wordLyrics.value) {
@@ -289,41 +284,27 @@ async function toggleWordLyrics(): Promise<void> {
   }
 }
 
-/** 逐字歌词 → 逐字 LRC 并写入同名 .lrc（LDDC / lx-music 格式）。 */
+/** 抓取逐字歌词（含数据源 / AI 译文）并写入所选目标。 */
 async function saveWordLyrics(): Promise<void> {
   if (!track.value) return
   savingWord.value = true
   error.value = null
   message.value = null
   try {
-    const result = await lyricsApi.saveWordLyrics(track.value.id)
+    const targets = WRITE_TARGET_MAP[writeTargets.value] ?? ['embedded', 'nilyric']
+    const result = await lyricsApi.saveWordLyrics(
+      track.value.id,
+      targets,
+      writeTranslation.value,
+    )
     if (result.content) lyrics.value = result.content
-    lyricsSource.value = result.source
-    track.value = { ...track.value, has_lyrics: true }
-    message.value = '已写入两个同名歌词文件：逐行 .lrc 与 逐字 .nilyric'
+    track.value = { ...track.value, has_lyrics: true, has_word_lyrics: true }
+    message.value = `已写入逐字歌词${writeTranslation.value === 'none' ? '' : '（含译文）'}`
     emit('saved', track.value)
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '逐字歌词写入失败'
+    error.value = e instanceof Error ? e.message : '写入失败'
   } finally {
     savingWord.value = false
-  }
-}
-
-async function saveLyrics(): Promise<void> {
-  if (!track.value) return
-  savingLyrics.value = true
-  error.value = null
-  message.value = null
-  try {
-    await lyricsApi.put(track.value.id, lyrics.value, 'embedded')
-    track.value = { ...track.value, has_lyrics: true }
-    lyricsSource.value = 'embedded'
-    message.value = '歌词已写入内嵌'
-    emit('saved', track.value)
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '歌词写入失败'
-  } finally {
-    savingLyrics.value = false
   }
 }
 
@@ -612,85 +593,83 @@ watch(
           <div class="col-span-2 sm:col-span-1"><dt class="text-muted">修改时间</dt><dd>{{ formatDateTime(track.mtime) }}</dd></div>
         </dl>
 
-        <!-- 歌词 -->
-        <div class="mt-6 flex flex-wrap items-center justify-between gap-2">
-          <h3 class="text-xs font-medium uppercase tracking-wide text-muted">
-            歌词<span v-if="lyricsSource" class="ml-1 normal-case text-muted">（来源：{{ lyricsSource }}）</span>
-          </h3>
-          <div class="flex flex-wrap items-center gap-1.5">
-            <select
-              v-model="translateTarget"
-              class="rounded-control border border-border bg-bg px-2 py-1 text-xs text-text outline-none focus:border-brand"
-              aria-label="翻译目标语言"
-            >
-              <option value="zh">译中文</option>
-              <option value="en">译 English</option>
-              <option value="ja">译 日本語</option>
-            </select>
-            <button
-              type="button"
-              class="rounded-control border border-brand/50 px-2.5 py-1 text-xs text-brand transition-colors hover:bg-brand/10 disabled:opacity-50"
-              :disabled="translating || loading || !aiAvailable"
-              :title="aiAvailable ? '用 AI 生成双语对照歌词（确认后再写入）' : '需在「设置」中启用 AI 辅助'"
-              @click="onTranslate"
-            >
-              {{ translating ? '翻译中…' : 'AI 翻译' }}
-            </button>
-            <button
-              type="button"
-              class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-brand/60 hover:text-text disabled:opacity-50"
-              :disabled="wordLoading || loading"
-              title="逐字歌词预览（只读，不写入文件）"
-              @click="toggleWordLyrics"
-            >
-              {{ wordLoading ? '获取中…' : wordLyrics ? '收起逐字' : '逐字预览' }}
-            </button>
-            <button
-              type="button"
-              class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-brand/60 hover:text-text disabled:opacity-50"
-              :disabled="savingWord || loading"
-              title="写入两个同名歌词文件：标准逐行 .lrc + 逐字 .nilyric（逐字需支持该标记的播放器）"
-              @click="saveWordLyrics"
-            >
-              {{ savingWord ? '写入中…' : '逐字存为文件' }}
-            </button>
-            <button
-              type="button"
-              class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-brand/60 hover:text-text disabled:opacity-50"
-              :disabled="savingLyrics"
-              @click="saveLyrics"
-            >
-              {{ savingLyrics ? '写入中…' : '写入内嵌' }}
-            </button>
-          </div>
-        </div>
-        <textarea
-          v-model="lyrics"
-          rows="6"
-          placeholder="[00:01.00] 支持 LRC 时间轴"
-          class="mt-2 w-full rounded-control border border-border bg-bg px-3 py-2 font-mono text-xs text-text outline-none focus:border-brand"
-        />
-
-        <!-- 逐字歌词预览（只读，不落盘） -->
-        <div
-          v-if="wordLyrics"
-          class="mt-2 max-h-60 overflow-y-auto rounded-control border border-border bg-bg p-2.5 text-xs"
-        >
-          <p class="mb-1.5 text-[11px] text-muted">
-            逐字歌词预览 · 来源：{{ wordSource || '—' }} · 仅预览，不写入文件
-          </p>
-          <div v-for="(line, i) in wordLyrics" :key="i" class="flex gap-2 py-0.5">
-            <span class="shrink-0 font-mono text-[10px] text-muted">{{ clock(line.start / 1000) }}</span>
-            <span class="min-w-0 flex-1 leading-relaxed">
-              <span
-                v-for="(word, j) in line.words"
-                :key="j"
-                class="rounded px-0.5 hover:bg-surface-2"
-                :title="`+${word.offset}ms · ${word.duration}ms`"
-                >{{ word.text }}</span
+        <!-- 歌词：抓取逐字（含译文）→ 写入内嵌 / 同名边车 -->
+        <div class="mt-6">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h3 class="text-xs font-medium uppercase tracking-wide text-muted">歌词</h3>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                class="rounded-control border border-border px-2.5 py-1 text-xs text-muted transition-colors hover:border-brand/60 hover:text-text disabled:opacity-50"
+                :disabled="wordLoading || loading"
+                title="从数据源预览逐字歌词（只读，不写入）"
+                @click="toggleWordLyrics"
               >
-            </span>
+                {{ wordLoading ? '获取中…' : wordLyrics ? '收起预览' : '预览逐字' }}
+              </button>
+              <select
+                v-model="writeTargets"
+                class="rounded-control border border-border bg-bg px-2 py-1 text-xs text-text outline-none focus:border-brand disabled:opacity-50"
+                :disabled="savingWord || loading"
+                aria-label="歌词写入位置"
+                title="写入位置"
+              >
+                <option value="both-nilyric">内嵌 + .nilyric</option>
+                <option value="both-lrc">内嵌 + .lrc</option>
+                <option value="embedded">仅内嵌</option>
+                <option value="nilyric">仅 .nilyric</option>
+                <option value="lrc">仅 .lrc</option>
+              </select>
+              <select
+                v-model="writeTranslation"
+                class="rounded-control border border-border bg-bg px-2 py-1 text-xs text-text outline-none focus:border-brand disabled:opacity-50"
+                :disabled="savingWord || loading"
+                aria-label="译文来源"
+                title="译文来源：数据源自带免费；AI 生成可能产生费用，需显式选择"
+              >
+                <option value="none">无译文</option>
+                <option value="source">译文·数据源</option>
+                <option value="ai" :disabled="!aiAvailable">
+                  译文·AI{{ aiAvailable ? '' : '（未配置）' }}
+                </option>
+              </select>
+              <button
+                type="button"
+                class="rounded-control bg-brand px-3 py-1 text-xs font-medium text-bg transition-colors hover:bg-brand-600 disabled:opacity-50"
+                :disabled="savingWord || loading"
+                title="抓取逐字歌词并写入所选位置"
+                @click="saveWordLyrics"
+              >
+                {{ savingWord ? '写入中…' : '抓取并写入' }}
+              </button>
+            </div>
           </div>
+
+          <!-- 逐字 + 译文 预览（只读，不落盘） -->
+          <div
+            v-if="wordLyrics"
+            class="mt-2 max-h-60 overflow-y-auto rounded-control border border-border bg-bg p-2.5 text-xs"
+          >
+            <p class="mb-1.5 text-[11px] text-muted">逐字预览 · 来源：{{ wordSource || '—' }}</p>
+            <div v-for="(line, i) in wordLyrics" :key="i" class="flex gap-2 py-0.5">
+              <span class="shrink-0 font-mono text-[10px] text-muted">{{ clock(line.start / 1000) }}</span>
+              <span class="min-w-0 flex-1 leading-relaxed">
+                <span
+                  v-for="(word, j) in line.words"
+                  :key="j"
+                  class="rounded px-0.5 hover:bg-surface-2"
+                  :title="`+${word.offset}ms · ${word.duration}ms`"
+                  >{{ word.text }}</span
+                >
+              </span>
+            </div>
+          </div>
+
+          <!-- 当前歌词（只读） -->
+          <pre
+            v-if="lyrics"
+            class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-control border border-border bg-bg p-2.5 font-mono text-[11px] leading-relaxed text-muted"
+          >{{ lyrics }}</pre>
         </div>
 
         <!-- 最近操作 -->

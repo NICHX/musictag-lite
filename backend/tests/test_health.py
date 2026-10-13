@@ -18,19 +18,27 @@ def test_version_and_capabilities(client) -> None:
     assert set(caps) >= {"ffmpeg", "fpcalc"}
 
 
-def test_openapi_schema(client) -> None:
+def test_openapi_schema_only_public(client) -> None:
+    """默认 /docs 只发布对外 /api/open，内部接口不进入契约（避免过度暴露）。"""
     schema = client.get("/api/openapi.json").json()
     assert schema["info"]["title"] == "MusicTag Lite"
-    # 关键路径均已纳入契约
+
     paths = schema["paths"]
     for path in (
-        "/api/libraries",
-        "/api/tracks",
-        "/api/tracks/batch",
-        "/api/providers",
-        "/api/scrape/search",
-        "/api/settings",
-        "/api/logs",
-        "/api/tasks",
+        "/api/open/tracks",
+        "/api/open/tracks/{track_id}",
+        "/api/open/scrape/search",
+        "/api/open/scrape/apply",
+        "/api/open/providers",
     ):
         assert path in paths, path
+
+    for internal in (
+        "/api/libraries",
+        "/api/tracks/batch",
+        "/api/providers",
+        "/api/settings",
+        "/api/tasks",
+        "/api/logs",
+    ):
+        assert internal not in paths, internal

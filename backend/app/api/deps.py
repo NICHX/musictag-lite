@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from fastapi import HTTPException
+import hmac
+
+from fastapi import Depends, Header, HTTPException
 from sqlmodel import Session, select
 
+from app.core.db import get_session
 from app.core.security import PathSecurityError, ensure_within_roots
 from app.models.db import Library, Track
+from app.services import api_token
 
 
 def not_implemented(milestone: str = "M1", detail: str | None = None) -> HTTPException:
@@ -16,6 +20,29 @@ def not_implemented(milestone: str = "M1", detail: str | None = None) -> HTTPExc
         detail=detail or f"该接口将在 {milestone} 实现",
         headers={"X-Milestone": milestone},
     )
+
+
+def require_api_token(
+    authorization: str | None = Header(default=None),
+    x_api_token: str | None = Header(default=None),
+    session: Session = Depends(get_session),
+) -> None:
+    """对外 API（``/api/open/*``）的 Token 鉴权。
+
+    接受 ``Authorization: Bearer <token>`` 或 ``X-API-Token: <token>``。
+    """
+    config = api_token.resolve(session)
+    if not config.active:
+        raise HTTPException(status_code=403, detail="对外 API 未启用或未配置 Token")
+    provided = x_api_token
+    if not provided and authorization and authorization.lower().startswith("bearer "):
+        provided = authorization[7:].strip()
+    if not provided or not hmac.compare_digest(provided, config.token or ""):
+        raise HTTPException(
+            status_code=401,
+            detail="无效的 API Token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def library_roots(session: Session) -> list[str]:
