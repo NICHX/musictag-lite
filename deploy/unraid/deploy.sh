@@ -6,11 +6,11 @@
 #       使其可以在 Unraid 后台 → Docker → Compose 中直接 启动/停止/更新/编辑/看日志。
 #
 # 用法（在仓库根目录执行）：
-#   deploy/unraid/deploy.sh
-#   NAS_HOST=root@10.0.0.5 PORT=8080 MUSIC_PATH=/mnt/user/media/music deploy/unraid/deploy.sh
+#   NAS_HOST=root@<NAS 地址> deploy/unraid/deploy.sh
+#   NAS_HOST=root@<NAS 地址> PORT=8080 MUSIC_PATH=/mnt/user/media/music deploy/unraid/deploy.sh
 #
-# 可用环境变量（均有默认值）：
-#   NAS_HOST    默认 root@192.168.31.252
+# 可用环境变量：
+#   NAS_HOST    必填，NAS 的 SSH 地址（如 root@10.0.0.5）
 #   APP_DIR     默认 /mnt/user/appdata/musictag-lite      （源码 src/ 与数据 data/ 的根）
 #   STACK_NAME  默认 musictag-lite
 #   STACK_DIR   默认 /boot/config/plugins/compose.manager/projects/<STACK_NAME>
@@ -18,7 +18,7 @@
 #   PORT        默认 8000
 set -euo pipefail
 
-NAS_HOST="${NAS_HOST:-root@192.168.31.252}"
+NAS_HOST="${NAS_HOST:?请设置 NAS_HOST，例如 NAS_HOST=root@10.0.0.5 deploy/unraid/deploy.sh}"
 APP_DIR="${APP_DIR:-/mnt/user/appdata/musictag-lite}"
 STACK_NAME="${STACK_NAME:-musictag-lite}"
 STACK_DIR="${STACK_DIR:-/boot/config/plugins/compose.manager/projects/$STACK_NAME}"

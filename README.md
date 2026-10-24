@@ -171,11 +171,11 @@ Unraid 上把上述变量写进栈的 `.env`
 `Unraid → Docker → Compose` 中启动/停止/更新/编辑/看日志）并构建启动：
 
 ```bash
-# 默认部署到 root@192.168.31.252，可用环境变量覆盖
-deploy/unraid/deploy.sh
+# 用 NAS_HOST 指定 NAS 地址，PORT / MUSIC_PATH 等可选覆盖
+NAS_HOST=root@<你的 NAS 地址> deploy/unraid/deploy.sh
 
-# 例：换 NAS / 换端口 / 换曲库
-NAS_HOST=root@10.0.0.5 PORT=8080 MUSIC_PATH=/mnt/user/media/music \
+# 例：同时指定端口与曲库路径
+NAS_HOST=root@<你的 NAS 地址> PORT=8080 MUSIC_PATH=/mnt/user/media/music \
   deploy/unraid/deploy.sh
 ```
 
