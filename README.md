@@ -6,9 +6,19 @@
 - 音频核心：**mutagen**（纯 Python，**不依赖 ffmpeg**）
 - 前端：Vue 3 `<script setup>` + TypeScript + Vite + Vue Router + Pinia + Tailwind CSS v4
 - 实时进度：WebSocket `/ws/events`
+- 可选能力：`fpcalc`（AcoustID 指纹识别）、OpenAI 兼容 AI（默认关闭）、ffmpeg（转码，预留）
 - 部署：本地 dev 运行 + Docker 单镜像（FastAPI 同时托管 `/api` 与前端静态资源）
 
 > 完整设计文档见 [`docs/music-tag-lite-design.md`](docs/music-tag-lite-design.md)。
+
+## 功能一览
+
+- **音乐库**：多库根目录、增量扫描、列表 / 封面墙、按缺封面 / 无歌词 / 无逐字 / 缺标签筛选。
+- **标签编辑**：单条与批量（覆盖 / 仅填空 / 追加）、查找替换、繁简转换、按文件名解析（离线规则 + 可选 AI）。
+- **在线刮削**：MusicBrainz + Cover Art Archive + LRCLIB 内置；网易云 / QQ / 酷狗以可安装扩展提供。
+- **封面与歌词**：封面读写 / 批量替换；逐字歌词预览与落盘（内嵌 / `.nilyric` / `.lrc`）、数据源或 AI 译文。
+- **整理与试听**：按模板智能整理（预演 → 执行）；HTTP Range 流式试听。
+- **集成与运维**：对外 Token API、操作日志、后台任务中心、WebSocket 进度推送。
 
 ## 目录结构
 
@@ -34,6 +44,8 @@
 │  └─ package.json
 ├─ docker/
 │  └─ docker-compose.yml
+├─ deploy/
+│  └─ unraid/          # Unraid Compose Manager 部署脚本
 └─ docs/
 ```
 
@@ -49,6 +61,9 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 启动后：API 文档 <http://127.0.0.1:8000/docs>，健康检查 `GET /api/health`。
+开发模式（`DEBUG=true`）启动时会自动执行数据库迁移。
+
+> 可选：指纹识别需要系统安装 Chromaprint 的 `fpcalc`；不安装不影响核心功能。
 
 ### 前端
 
@@ -56,6 +71,8 @@ uvicorn app.main:app --reload --port 8000
 cd frontend
 npm install
 npm run dev        # Vite dev server，已代理 /api 到 http://127.0.0.1:8000
+npm run typecheck  # vue-tsc 类型检查
+npm run build      # 构建静态资源（生产镜像也会执行）
 ```
 
 ### 测试
@@ -67,6 +84,11 @@ cd backend && pytest
 # 前端
 cd frontend && npm run test
 ```
+
+### 接口文档
+
+`/docs` 默认**只公开对外 `/api/open`**；需要查看内部 `/api/*` 时设置
+`DOCS_INCLUDE_INTERNAL=true` 后重启。
 
 ## 歌词
 
@@ -85,8 +107,12 @@ cd frontend && npm run test
 - **译文来源**：`无译文` / `译文·数据源`（默认，免费）/ `译文·AI`（显式选择，**可能产生费用**；未配置 AI 时不可选）；
 - **抓取并写入**：抓取逐字歌词并写入所选位置。
 
+**歌词与逐字来源**：按「设置 → 刮削源」中已启用歌词源的顺序抓取（LRCLIB 内置；
+网易云 / QQ / 酷狗由 `community-cn` 扩展提供，需先安装并启用），与元数据候选来自哪个源**相互独立**。
+刮削应用后会分别标注元数据、歌词与逐字歌词各自的来源。
+
 **AI 默认不参与**：只有显式选「译文·AI」才会调用模型——逐字写入与批量抓取**都不会**自动调用 AI。
-数据源（网易云 / QQ）的歌词接口本就合并了译文，选「译文·数据源」即可免费并入；不需要译文的歌选「无译文」。
+数据源（网易云 / QQ / 酷狗）的歌词接口本就合并了译文，选「译文·数据源」即可免费并入；不需要译文的歌选「无译文」。
 下方只读展示当前歌词。批量场景用资源库底部的「逐字歌词」按钮（写内嵌 + `.nilyric`，仅用数据源译文）；
 它是**后台任务**，进度见任务中心，完成后列表会自动刷新。
 
@@ -107,7 +133,8 @@ cd frontend && npm run test
 ### 可选 AI 辅助（默认关闭，仅手动触发）
 
 需要模型更强地处理「长括号描述 + 多艺术家 + 冷门曲目」这类规则难拆的文件名时，
-可接入任意 **OpenAI 兼容**接口（OpenAI / DeepSeek / 硅基流动 / LM Studio / Ollama…）：
+可接入任意 **OpenAI 兼容**接口（OpenAI / DeepSeek / 硅基流动 / LM Studio / Ollama…）。
+推荐直接在 **设置 → AI 辅助识别** 中填写（密钥脱敏展示，可随时清除）；也可用环境变量：
 
 ```bash
 # backend/.env（本地开发）
@@ -117,6 +144,8 @@ AI_MODEL=deepseek-chat
 AI_API_KEY=sk-xxx
 ```
 
+优先级：**界面设置（数据库） > 环境变量**。
+
 隐私与安全约束：**默认关闭**；**只发送文件名字符串**（不含路径、不上传音频）；
 **仅在你点击「AI 解析」时调用**，不会在扫描/刮削流程中自动触发；密钥不写日志。
 启用后检查器会出现「AI 解析」按钮，解析失败会自动回退到本地规则。
@@ -124,6 +153,12 @@ AI_API_KEY=sk-xxx
 Unraid 上把上述变量写进栈的 `.env`
 （`/boot/config/plugins/compose.manager/projects/musictag-lite/.env`）后重启栈即可；
 `deploy/unraid/deploy.sh` 会**保留**这些手填的键，重新部署不会覆盖它们。
+
+### 可选指纹识别（AcoustID）
+
+在 **设置 → 指纹识别** 填写免费的 AcoustID API Key（也可用 `ACOUSTID_API_KEY`）。
+指纹由本地 `fpcalc` 计算，**只发送指纹与时长**，不上传音频本体。
+在「刮削源」中启用 AcoustID 后，刮削搜索无命中时会自动指纹兜底；也可在刮削页手动触发。
 
 ## Docker 部署
 
@@ -171,14 +206,28 @@ APP_SECRET_KEY=$(openssl rand -hex 32) MUSIC_PATH=/path/to/music docker compose 
 - 接口：`GET /api/extensions`、`POST /api/extensions/catalog/{key}/install`、
   `POST /api/extensions/install`（上传 zip）、`DELETE /api/extensions/{key}`。
 
+## 设置
+
+| 区块 | 作用 |
+| --- | --- |
+| 音乐库 | 添加 / 移除库根目录（路径白名单；移除库只清理索引，不动磁盘文件） |
+| 刮削源 | 启用 / 停用内置与扩展源；拖动排序决定元数据检索与歌词回退顺序 |
+| 扩展 | 从内置 catalog 安装、上传 zip 安装或卸载；安装后需在「刮削源」中启用 |
+| AI 辅助识别 | OpenAI 兼容配置；密钥脱敏，界面配置优先于环境变量 |
+| 指纹识别 | AcoustID API Key（需 `fpcalc`，镜像内已包含） |
+| 对外 API | Token 查看 / 复制 / 重新生成 / 一键停用 |
+| 运行状态 | 版本、环境、ffmpeg 检测结果 |
+
 ## 对外 API（Token 鉴权）
 
 供外部系统（Navidrome / 脚本 / 自建前端 / 智能音箱等）集成的接口挂在 **`/api/open`**，
 开放**核心功能白名单**（浏览 + 匹配 + 单条写入）；管理类与重型接口不开放
 （库增删改/扫描、数据源配置、批量编辑、封面替换、整理/转码、任务日志、扩展、设置等仅内部 SPA 使用）。
+`/docs` 默认只包含本节接口；`GET /api/open` 返回端点索引。
 
 | 分组 | 端点 | 说明 |
 | --- | --- | --- |
+| 索引 | `GET /api/open` | 端点索引与鉴权说明 |
 | 浏览 | `GET /api/open/health` · `/version` | 健康检查 / 版本 |
 | 浏览 | `GET /api/open/libraries` | 音乐库列表 |
 | 浏览 | `GET /api/open/providers` | 数据源列表（含启用状态，便于选择匹配源） |
@@ -191,7 +240,7 @@ APP_SECRET_KEY=$(openssl rand -hex 32) MUSIC_PATH=/path/to/music docker compose 
 | 写入 | `PATCH /api/open/tracks/{id}` | 单条标签编辑（落盘） |
 | 写入 | `PUT /api/open/tracks/{id}/lyrics` | 歌词写入（内嵌 / .lrc / 两者） |
 
-所有请求需携带令牌：
+所有请求需携带令牌（二选一）：`X-API-Token: <token>` 或 `Authorization: Bearer <token>`。
 
 ```bash
 # 发起匹配 → 返回候选
@@ -214,8 +263,9 @@ curl -H "X-API-Token: <token>" -H "Content-Type: application/json" \
   全链路**不依赖 ffmpeg**。
 - **M2 增强（P1）**（已完成）：试听（Range 流式）、文件名↔标签互转、查找替换、繁简转换、智能整理、
   多源兜底（网易云 / QQ 音乐 / 酷狗，以**可安装扩展**提供、默认关闭）、封面批处理、AcoustID 指纹识别、
-  逐字歌词（预览 + 落盘 `.lrc`/`.nilyric`）、AI 歌词双语翻译、刮削响应 TTL 缓存、跨页「选择全部」批量。
-- **M3 重型（P2）**：ffmpeg 转码、CUE 分轨、播放统计、多用户与权限。
+  逐字歌词（预览 + 落盘 `.lrc`/`.nilyric`）、AI 歌词双语翻译、刮削响应 TTL 缓存、跨页「选择全部」批量、
+  社区源扩展化、对外 Token API、歌词 / 逐字来源与元数据来源解耦。
+- **M3 重型（P2）**（规划中）：ffmpeg 转码、CUE 分轨、播放统计、多用户与权限。
 
 ### 使用流程
 
@@ -228,6 +278,7 @@ curl -H "X-API-Token: <token>" -H "Content-Type: application/json" \
 5. 多选 → 底部批量条：覆盖 / 仅填空 / 追加 / 查找替换 / 简繁转换、封面、逐字歌词；
    本页全选后可「选择全部 N 首」跨页批量操作。
 6. 刮削中心：选曲 → 多源候选（按匹配分排序）→ 字段 diff 对比 → 应用（可仅补空值、带封面/歌词/逐字）；
+   应用回执会分别标注**元数据、歌词、逐字歌词**的来源，歌词与逐字按刮削源顺序独立抓取；
    返回资源库会自动打开刚匹配曲目的详情。
 7. 操作日志页查看每次写入的前后值与来源。
 
